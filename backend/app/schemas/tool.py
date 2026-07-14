@@ -71,3 +71,37 @@ class ToolResponse(ToolBase):
 
     class Config:
         from_attributes = True
+
+
+class ToolExecuteRequest(BaseModel):
+    """Payload to invoke a registered tool.
+
+    ``arguments`` are the runtime parameters passed to the tool; they are
+    validated against the tool's ``input_schema`` by the execution engine.
+    """
+
+    arguments: Optional[Dict[str, Any]] = None
+
+
+class ToolExecutionResponse(BaseModel):
+    """Normalized outcome of executing a tool (Milestone 4, Phase 2).
+
+    Mirrors ``ToolResult.to_dict()``. ``success`` is False on any failure; the
+    failure reason lives in ``error`` / ``error_type``.
+    """
+
+    execution_id: str
+    success: bool
+    tool_id: Optional[UUID] = None
+    tool_name: str
+    tool_type: str
+    arguments: Dict[str, Any]
+    output: Optional[Any] = None
+    error: Optional[str] = None
+    error_type: Optional[str] = None
+    started_at: datetime
+    duration_ms: float
+    meta: Dict[str, Any] = {}
+
+    class Config:
+        from_attributes = True

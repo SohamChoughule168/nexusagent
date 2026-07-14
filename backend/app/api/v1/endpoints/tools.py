@@ -8,11 +8,23 @@ from app.core.auth_dependencies import get_tenant_context, require_roles
 from app.core.database import get_db
 from app.models.all_models import Tool
 from app.repositories.tenant_repository import RepositoryFactory
-from app.schemas.tool import ToolCreate, ToolResponse, ToolUpdate
+from app.schemas.tool import (
+    ToolCreate,
+    ToolExecutionResponse,
+    ToolExecuteRequest,
+    ToolResponse,
+    ToolUpdate,
+)
+from app.services.tool_executor import ToolExecutionEngine
 from app.services.tool_registry import SUPPORTED_TOOL_TYPES
 from app.services.tenant_context import TenantContext
 
 router = APIRouter(prefix="/tools", tags=["tools"])
+
+# Single engine instance shared across requests (stateless, tenant-scoped per
+# call). Reuses the existing RepositoryFactory/ToolRepository for tenant
+# isolation rather than opening its own data path.
+_executor = ToolExecutionEngine()
 
 # Roles permitted to manage (register / update / delete) tools. Reads are
 # allowed for any authenticated member of the organization, mirroring the agent
@@ -157,3 +169,40 @@ def delete_tool(
         )
 
     tools_repo.delete(tool)
+
+
+@router.post(
+    "/{tool_id}/execute",
+    response_model=ToolExecutionResponse,
+)
+def execute_tool(
+    tool_id: str,
+    payload: ToolExecuteRequest,
+    tenant: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """Execute a registered tool within the authenticated principal's tenant.
+
+    The tool is resolved *inside* ``organization_id`` (derived from the
+    principal), so a tool owned by another tenant cannot be executed -- tenant
+    isolation is preserved by the engine's repository lookup. Any tenant member
+    may invoke a tool; the fine-grained Tool-Permissions matrix is a later Phase
+    2 component.
+
+    A successful HTTP 200 does not imply the tool *ran* successfully: tool
+    failures are reported via ``success=False`` in the body (mirroring agent
+    tool-call semantics). A 404 means the tool does not exist in this tenant.
+    """
+    tool_uuid = _uuid_or_400(tool_id, "tool_id")
+    result = _executor.execute_by_id(
+        tool_id=tool_uuid,
+        organization_id=tenant.organization_id,
+        arguments=payload.arguments,
+        db=db,
+    )
+    if result.error_type == "not_found":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tool not found",
+        )
+    return ToolExecutionResponse(**result.to_dict())

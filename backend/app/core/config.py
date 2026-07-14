@@ -154,6 +154,12 @@ class Settings(BaseSettings):
     ENABLE_LEAD_CAPTURE_TOOL: bool = True
     ENABLE_HUMAN_ESCALATION_TOOL: bool = True
 
+    # Tool Execution Engine (Milestone 4, Phase 2) -- safety / resource bounds
+    # applied by the engine to every tool run. These are coarse, engine-level
+    # guards; the dedicated Safe-Execution hardening layer is a later component.
+    TOOL_EXECUTION_TIMEOUT_SECONDS: float = 15.0
+    TOOL_EXECUTION_MAX_OUTPUT_CHARS: int = 10000
+
     # Celery
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
