@@ -1,47 +1,51 @@
 import json
-import re
-from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import List
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.auth_dependencies import get_tenant_context, require_roles
 from app.core.database import get_db
 from app.models.all_models import Agent
 from app.repositories.tenant_repository import RepositoryFactory
 from app.schemas.agent import (
     AgentCreate,
-    AgentUpdate,
     AgentResponse,
-    AgentSettingsResponse,
-    Both,
-    StringMap,
+    AgentUpdate,
 )
+from app.services.tenant_context import TenantContext
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
-
-def _slugify(value: str) -> str:
-    """Minimal slugify without external dependency."""
-    value = (value or "").lower().strip()
-    value = re.sub(r"[^a-z0-9]+", "-", value)
-    return value.strip("-") or str(uuid4())[:8]
+# Roles permitted to perform agent management (create/update/delete).
+# Mirrors ``TenantContext.can_manage_agents`` (owner, admin, member). Reads are
+# allowed for any authenticated member of the organization.
+_AGENT_MANAGER_ROLES = ("owner", "admin", "member")
 
 
 @router.get("/", response_model=List[AgentResponse])
-def list_agents(db: Session = Depends(get_db)):
-    """List all agents for the current context."""
-    # NOTE: Tenant scoping is enforced in later milestones.
-    repository_factory = RepositoryFactory(db)
-    agents_repo = repository_factory.agents()
+def list_agents(
+    tenant: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """List agents for the authenticated principal's tenant."""
+    # Tenant isolation is enforced by deriving organization_id from the
+    # authenticated principal (see app.core.auth_dependencies), never from
+    # request data.
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
+    agents_repo = repo_factory.agents()
     return agents_repo.get_all()
 
 
 @router.get("/{public_id}", response_model=AgentResponse)
-def get_agent(public_id: str, db: Session = Depends(get_db)):
-    """Get an agent by public ID."""
-    repo_factory = RepositoryFactory(db)
+def get_agent(
+    public_id: str,
+    tenant: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """Get an agent by public ID within the authenticated principal's tenant."""
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
     agents_repo = repo_factory.agents()
     agent = agents_repo.get_by_public_id(public_id)
 
@@ -55,50 +59,61 @@ def get_agent(public_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
-def create_agent(agent_data: AgentCreate, db: Session = Depends(get_db)):
-    """Create a new agent."""
-    repo_factory = RepositoryFactory(db)
+def create_agent(
+    agent_data: AgentCreate,
+    tenant: TenantContext = Depends(require_roles(*_AGENT_MANAGER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Create a new agent for the authenticated principal's tenant."""
+    # organization_id is derived exclusively from the authenticated principal;
+    # it is never read from the request body and never randomly generated.
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
     agents_repo = repo_factory.agents()
 
     public_id = agent_data.public_id or str(uuid4())[:8]
-    name_slug = _slugify(agent_data.name)
 
     config = dict(agent_data.config or {})
-    config.setdefault("model_name", "anthropic/claude-3.5-sonnet")
-    config.setdefault("temperature", 0.7)
-
-    agent = Agent(
-        organization_id=agent_data.organization_id
-        if getattr(agent_data, "organization_id", None)
-        else uuid4(),
-        name=agent_data.name,
-        description=agent_data.description,
-        system_prompt=agent_data.system_prompt,
-        welcome_message=agent_data.welcome_message,
-        model_provider=agent_data.model_provider or "openrouter",
-        model_name=config["model_name"],
-        temperature=config["temperature"],
-        max_tokens=config.get("max_tokens"),
-        top_p=config.get("top_p"),
-        presence_penalty=config.get("presence_penalty"),
-        frequency_penalty=config.get("frequency_penalty"),
-        status="draft",
-        public_id=public_id,
-        config=json.dumps(config),
+    config.setdefault("model_name", agent_data.model_name or "anthropic/claude-3.5-sonnet")
+    config.setdefault(
+        "temperature",
+        agent_data.temperature if agent_data.temperature is not None else 0.7,
     )
 
-    db.add(agent)
-    db.commit()
-    db.refresh(agent)
-    return agent
+    agent = Agent(
+        organization_id=str(tenant.organization_id),
+        data={
+            "name": agent_data.name,
+            "description": agent_data.description,
+            "system_prompt": agent_data.system_prompt,
+            "welcome_message": agent_data.welcome_message,
+            "model_provider": agent_data.model_provider or "openrouter",
+            "model_name": config["model_name"],
+            "temperature": config["temperature"],
+            "max_tokens": agent_data.max_tokens,
+            "top_p": agent_data.top_p,
+            "presence_penalty": agent_data.presence_penalty,
+            "frequency_penalty": agent_data.frequency_penalty,
+            "status": "draft",
+            "public_id": public_id,
+            "config": config,
+        },
+    )
+    # The Agent model overrides the base ``id`` without a server_default, so an
+    # explicit primary key is required for an ORM insert.
+    agent.id = uuid4()
+
+    return agents_repo.create(agent)
 
 
 @router.put("/{public_id}", response_model=AgentResponse)
 def update_agent(
-    public_id: str, agent_data: AgentUpdate, db: Session = Depends(get_db)
+    public_id: str,
+    agent_data: AgentUpdate,
+    tenant: TenantContext = Depends(require_roles(*_AGENT_MANAGER_ROLES)),
+    db: Session = Depends(get_db),
 ):
-    """Update an agent."""
-    repo_factory = RepositoryFactory(db)
+    """Update an agent within the authenticated principal's tenant."""
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
     agents_repo = repo_factory.agents()
     existing_agent = agents_repo.get_by_public_id(public_id)
 
@@ -108,21 +123,23 @@ def update_agent(
             detail="Agent not found",
         )
 
+    # Only fields present in the request are mutated; the agent was already
+    # resolved within the tenant, so updates stay tenant-scoped.
     update_fields = agent_data.model_dump(exclude_unset=True)
     for field, value in update_fields.items():
         setattr(existing_agent, field, value)
 
-    existing_agent.updated_at = datetime.utcnow()
-    db.add(existing_agent)
-    db.commit()
-    db.refresh(existing_agent)
-    return existing_agent
+    return agents_repo.update(existing_agent)
 
 
 @router.delete("/{public_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_agent(public_id: str, db: Session = Depends(get_db)):
-    """Delete an agent."""
-    repo_factory = RepositoryFactory(db)
+def delete_agent(
+    public_id: str,
+    tenant: TenantContext = Depends(require_roles(*_AGENT_MANAGER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Delete an agent within the authenticated principal's tenant."""
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
     agents_repo = repo_factory.agents()
 
     agent = agents_repo.get_by_public_id(public_id)

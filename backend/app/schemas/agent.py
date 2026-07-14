@@ -1,3 +1,4 @@
+import uuid
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 from datetime import datetime
@@ -50,7 +51,7 @@ class AgentSettingsResponse(BaseModel):
     company_identity: Optional[Dict[str, Any]] = None
 
 class AgentResponse(AgentBase):
-    id: str
+    id: uuid.UUID
     public_id: str
     status: str
     config: Optional[Dict[str, Any]] = None
