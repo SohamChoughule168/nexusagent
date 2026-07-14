@@ -1,5 +1,5 @@
 import uuid
-from typing import List
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth_dependencies import get_tenant_context
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.core.database import get_db, db_session as db_session_ctx
 from app.models.all_models import Conversation, Message
 from app.repositories.tenant_repository import RepositoryFactory
@@ -16,6 +17,13 @@ from app.schemas.conversation import (
     ConversationResponse,
     MessageCreate,
     MessageResponse,
+)
+from app.services.function_calling import (
+    auto_select_tools,
+    discover_tools,
+    function_calling_enabled,
+    run_function_calling,
+    stream_final_answer,
 )
 from app.services.rag import (
     build_sources,
@@ -27,6 +35,8 @@ from app.services.rag import (
 from app.services.tenant_context import TenantContext
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
+
+logger = get_logger(__name__)
 
 
 def _uuid_or_400(value: str, field: str) -> uuid.UUID:
@@ -208,10 +218,48 @@ async def chat(
         tenant.organization_id, db, payload.message, payload.top_k, kb_ids
     )
     citations = build_sources(scored)
+    agent_system_prompt = agent.system_prompt if agent else None
+    model_provider = agent.model_provider if agent else "openrouter"
 
     async def event_stream():
         parts: List[str] = []
-        if rag_llm_enabled() and scored:
+        # Persisted on the assistant message: the executed tool calls / results.
+        tool_calls_payload: Dict[str, Any] = {}
+        tool_results_payload: Dict[str, Any] = {}
+
+        # Function Calling integration: when an LLM is configured and the tenant
+        # has active tools, ask the LLM to auto-select + call tools, execute them
+        # inside the tenant, inject the results, then stream the final grounded
+        # answer. Falls back to the standard RAG answer on any failure so the
+        # user always receives a response.
+        if function_calling_enabled(tenant.organization_id, db, agent):
+            try:
+                tools = discover_tools(tenant.organization_id, db, agent)
+                selected = auto_select_tools(payload.message, tools)
+                fc = await run_function_calling(
+                    payload.message,
+                    tenant.organization_id,
+                    db,
+                    model,
+                    selected,
+                    scored,
+                    agent_system_prompt=agent_system_prompt,
+                )
+                async for delta in stream_final_answer(fc.messages, model):
+                    parts.append(delta)
+                    yield delta
+                tool_calls_payload = {"calls": fc.tool_calls, "model": model}
+                tool_results_payload = {"results": fc.tool_results}
+            except Exception as exc:  # resilience: never let FC break the turn
+                logger.warning(
+                    "function_calling_failed_fallback_to_rag",
+                    conversation_id=str(conversation_id),
+                    error=str(exc),
+                )
+                text = compose_answer_offline(scored)
+                parts.append(text)
+                yield text
+        elif rag_llm_enabled() and scored:
             async for delta in stream_answer(payload.message, scored, model):
                 parts.append(delta)
                 yield delta
@@ -231,6 +279,10 @@ async def chat(
                 role="assistant",
                 content=full,
                 citations={"sources": citations},
+                tool_calls=tool_calls_payload,
+                tool_results=tool_results_payload,
+                model_provider=model_provider,
+                model_name=model,
                 token_count=len(full.split()),
             )
             assistant.id = uuid.uuid4()
