@@ -25,5 +25,4 @@ class User(Base):
 
     # Relationships
     organizations = relationship("OrganizationMember", back_populates="user")
-    audit_logs = relationship("AuditLog", back_populates="user")
-    api_keys = relationship("APIKey", back_populates="user")
+    audit_logs = relationship("AuditLogModel", back_populates="user")

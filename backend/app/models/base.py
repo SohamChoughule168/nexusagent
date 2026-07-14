@@ -1,10 +1,11 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Column, UUID, DateTime, Text, String
+from sqlalchemy import Column, UUID, DateTime, Text, String, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB as PGJSONB
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import func
+from sqlalchemy.orm import relationship
 
 Base = declarative_base()
 
@@ -40,11 +41,14 @@ class AuditLogModel(MultiTenantModel):
 
     __tablename__ = "audit_logs"
 
-    organization_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=True, index=True)
     action = Column(String(100), nullable=False)
     resource_type = Column(String(50), nullable=True)
     resource_id = Column(UUID(as_uuid=True), nullable=True)
-    user_id = Column(UUID(as_uuid=True), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     ip_address = Column(String(45), nullable=True)
     user_agent = Column(Text, nullable=True)
     meta = Column("metadata", PGJSONB, default=dict)
+
+    user = relationship("User", back_populates="audit_logs")
+    organization = relationship("Organization", back_populates="audit_logs")

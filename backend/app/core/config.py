@@ -1,4 +1,26 @@
+import json
+from pathlib import Path
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources import DotEnvSettingsSource
+
+
+class _CorsFriendlyDotEnvSource(DotEnvSettingsSource):
+    """Dotenv source that does not JSON-decode the CORS origins field.
+
+    pydantic-settings JSON-decodes every complex (non-scalar) field *before*
+    any pydantic validator runs, which makes a practical comma-separated
+    ``BACKEND_CORS_ORIGINS=http://a,http://b`` value fail to load. This source
+    leaves that one field as its raw string so the CORS ``field_validator`` can
+    parse comma-separated lists and JSON lists safely. All other fields keep
+    their normal behaviour.
+    """
+
+    def prepare_field_value(self, field_name, field, value, value_is_complex):
+        if field_name == "BACKEND_CORS_ORIGINS" and isinstance(value, str):
+            return value
+        return super().prepare_field_value(field_name, field, value, value_is_complex)
 from typing import List, Optional
 
 
@@ -6,9 +28,16 @@ class ConfigurationError(Exception):
     """Raised when required configuration is missing or insecure."""
 
 
+# Anchor env loading to the repository root so the .env is found regardless of
+# the current working directory the application/worker is launched from.
+# config.py lives at <root>/backend/app/core/config.py -> four parents up.
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
+ENV_FILE = ROOT_DIR / ".env"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
         # Redact secret-like fields from repr/logs automatically.
@@ -46,6 +75,44 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ]
+
+    @field_validator("BACKEND_CORS_ORIGINS", mode="before")
+    @classmethod
+    def _parse_cors_origins(cls, value: object) -> object:
+        """Accept a comma-separated string or a JSON list for CORS origins.
+
+        pydantic-settings only understands JSON for complex types, so a
+        practical ``http://a,http://b`` value from ``.env`` would otherwise
+        fail to validate. This keeps validation in place (we never bypass it)
+        while accepting both formats safely.
+        """
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("["):
+                # Accepts a JSON-encoded list, e.g. '["http://a","http://b"]'.
+                return [str(item).strip() for item in json.loads(stripped)]
+            # Practical comma-separated value, e.g. 'http://a,http://b'.
+            return [origin.strip() for origin in stripped.split(",") if origin.strip()]
+        return value
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        """Use the CORS-friendly dotenv source instead of the default one."""
+        return (
+            init_settings,
+            env_settings,
+            _CorsFriendlyDotEnvSource(settings_cls),
+            file_secret_settings,
+        )
 
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 100

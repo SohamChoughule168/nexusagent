@@ -25,6 +25,10 @@ class Organization(MultiTenantModel):
     updated_at: Optional[datetime] = Column(DateTime(timezone=True), onupdate=datetime.utcnow)
 
     # Relationships
+    settings_relationship = relationship(
+        "KeyValueSettings",
+        back_populates="organization"
+    )
     members = relationship("OrganizationMember", back_populates="organization")
     agents = relationship("Agent", back_populates="organization")
     knowledge_bases = relationship("KnowledgeBase", back_populates="organization")
@@ -33,4 +37,4 @@ class Organization(MultiTenantModel):
     leads = relationship("Lead", back_populates="organization")
     api_keys = relationship("APIKey", back_populates="organization")
     usage_events = relationship("UsageEvent", back_populates="organization")
-    audit_logs = relationship("AuditLog", back_populates="organization")
+    audit_logs = relationship("AuditLogModel", back_populates="organization")

@@ -34,8 +34,8 @@ class OrganizationMember(MultiTenantModel):
     __tablename__ = "organization_members"
 
     id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
-    organization_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
-    user_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
+    organization_id: str = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
+    user_id: str = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     role: str = Column(String(20), nullable=False)  # 'owner', 'admin', 'member', 'viewer'
     joined_at: datetime = Column(DateTime(timezone=True), default=datetime.utcnow)
 
@@ -69,7 +69,7 @@ class SystemSettings(MultiTenantModel):
 class Agent(MultiTenantModel):
     __tablename__ = "agents"
     id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
-    organization_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
+    organization_id: str = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     name: str = Column(String(255), nullable=False)
     description: Optional[str] = Column(Text)
     system_prompt: Text = Column(Text, nullable=False)
@@ -112,7 +112,7 @@ class Agent(MultiTenantModel):
 class KnowledgeBase(MultiTenantModel):
     __tablename__ = "knowledge_bases"
     id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
-    organization_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
+    organization_id: str = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     name: str = Column(String(255), nullable=False)
     description: Optional[str] = Column(Text)
     embedding_model: str = Column(String(100), default="text-embedding-3-small")
@@ -120,6 +120,10 @@ class KnowledgeBase(MultiTenantModel):
     chunk_overlap: int = Column(Integer, default=200)
     chunk_strategy: str = Column(String(50), default="recursive")
     retrieval_config: Dict[str, Any] = Column(JSONB, default=dict)
+
+    # Relationships
+    organization = relationship("Organization", back_populates="knowledge_bases")
+    documents = relationship("Document", back_populates="knowledge_base")
 
     def __init__(self, organization_id: str, data: Dict[str, Any]):
         self.organization_id = uuid.UUID(organization_id)
@@ -135,8 +139,8 @@ class KnowledgeBase(MultiTenantModel):
 class Document(MultiTenantModel):
     __tablename__ = "documents"
     id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
-    knowledge_base_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
-    organization_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
+    knowledge_base_id: str = Column(UUID(as_uuid=True), ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    organization_id: str = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     title: str = Column(String(255), nullable=False)
     original_filename: str = Column(String(255), nullable=False)
     mime_type: str = Column(String(100), nullable=False)
@@ -150,6 +154,7 @@ class Document(MultiTenantModel):
     upload_member_id: str = Column(UUID(as_uuid=True), nullable=False)  # Reference to User.id
 
     # Relationships
+    organization = relationship("Organization", back_populates="documents")
     knowledge_base = relationship("KnowledgeBase", back_populates="documents")
     document_chunks = relationship("DocumentChunk", back_populates="document")
 
@@ -170,9 +175,9 @@ class Document(MultiTenantModel):
 class DocumentChunk(MultiTenantModel):
     __tablename__ = "document_chunks"
     id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
-    document_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
-    knowledge_base_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
-    organization_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
+    document_id: str = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True)
+    knowledge_base_id: str = Column(UUID(as_uuid=True), ForeignKey("knowledge_bases.id"), nullable=False, index=True)
+    organization_id: str = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     chunk_index: int = Column(Integer, nullable=False)
     content: str = Column(Text, nullable=False)
     token_count: int = Column(Integer, default=0)
@@ -201,8 +206,8 @@ class DocumentChunk(MultiTenantModel):
 class Conversation(MultiTenantModel):
     __tablename__ = "conversations"
     id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
-    organization_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
-    agent_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
+    organization_id: str = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
+    agent_id: str = Column(UUID(as_uuid=True), ForeignKey("agents.id"), nullable=False, index=True)
     session_id: str = Column(String(255), nullable=False, unique=True)
     user_identifier: str = Column(String(255))  # Could be email or anonymous ID
     user_metadata: Dict[str, Any] = Column(JSONB, default=dict)
@@ -225,8 +230,8 @@ class Conversation(MultiTenantModel):
 class Message(MultiTenantModel):
     __tablename__ = "messages"
     id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
-    conversation_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
-    organization_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
+    conversation_id: str = Column(UUID(as_uuid=True), ForeignKey("conversations.id"), nullable=False, index=True)
+    organization_id: str = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     role: str = Column(String(20), nullable=False)  # 'user', 'assistant', 'system', 'tool'
     content: str = Column(Text, nullable=False)
     token_count: int = Column(Integer, default=0)
@@ -260,9 +265,9 @@ class Message(MultiTenantModel):
 class Lead(MultiTenantModel):
     __tablename__ = "leads"
     id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
-    organization_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
-    agent_id: Optional[str] = Column(UUID(as_uuid=True), nullable=True, index=True)
-    conversation_id: Optional[str] = Column(UUID(as_uuid=True), nullable=True, index=True)
+    organization_id: str = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
+    agent_id: Optional[str] = Column(UUID(as_uuid=True), ForeignKey("agents.id"), nullable=True, index=True)
+    conversation_id: Optional[str] = Column(UUID(as_uuid=True), ForeignKey("conversations.id"), nullable=True, index=True)
     name: str = Column(String(255))
     email: str = Column(String(255))
     phone: str = Column(String(50))
@@ -323,9 +328,12 @@ class UsageEvent(MultiTenantModel):
     """Track usage events for analytics and billing."""
     __tablename__ = "usage_events"
     id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
-    organization_id: str = Column(UUID(as_uuid=True), nullable=False, index=True)
-    agent_id: Optional[str] = Column(UUID(as_uuid=True), nullable=True, index=True)
-    conversation_id: Optional[str] = Column(UUID(as_uuid=True), nullable=True, index=True)
+    organization_id: str = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
+    agent_id: Optional[str] = Column(UUID(as_uuid=True), ForeignKey("agents.id"), nullable=True, index=True)
+    conversation_id: Optional[str] = Column(UUID(as_uuid=True), ForeignKey("conversations.id"), nullable=True, index=True)
+
+    # Relationships
+    organization = relationship("Organization", back_populates="usage_events")
     event_type: str = Column(String(50), nullable=False)  # 'chat_message', 'embedding_generation', 'tool_execution', etc.
     model_provider: str = Column(String(50))
     model_name: str = Column(String(100))
@@ -354,6 +362,12 @@ class APIKey(MultiTenantModel):
     """Hashed API key for programmatic access (key_hash never returned)."""
     __tablename__ = "api_keys"
     id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
+    organization_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id"),
+        nullable=False,
+        index=True,
+    )
     name: str = Column(String(255), nullable=False)
     key_hash: str = Column(String(255), nullable=False)
     key_prefix: str = Column(String(20), nullable=False, index=True)
@@ -363,3 +377,9 @@ class APIKey(MultiTenantModel):
     expires_at: Optional[datetime] = Column(DateTime(timezone=True))
     is_active: bool = Column(Boolean, default=True, nullable=False)
     created_at: datetime = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    # Relationships
+    organization = relationship(
+        "Organization",
+        back_populates="api_keys"
+    )

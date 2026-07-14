@@ -93,8 +93,19 @@ def upgrade():
         WITH CHECK (organization_id = current_setting('app.current_org_id')::uuid)
     """)
 
-    # Grant policy usage to application user (adjust as needed)
-    op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO nexus_user")
+    # Grant policy usage to application user (adjust as needed).
+    # Guard so the migration applies even when the role does not yet exist.
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'nexus_user') THEN
+                GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO nexus_user;
+            END IF;
+        END
+        $$;
+        """
+    )
 
     # Create application context function (for RLS to work)
     op.execute("""

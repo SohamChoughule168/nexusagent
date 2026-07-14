@@ -43,8 +43,8 @@ def test_security_headers_present(client: TestClient):
 
 
 def test_api_v1_router_mounted(client: TestClient):
-    # Verify the auth and agents sub-routers are mounted under /api/v1
-    # without depending on a database connection.
-    mounted_paths = [getattr(route, "path", "") for route in app.routes]
-    assert any("/api/v1/agents" in p for p in mounted_paths)
-    assert any("/api/v1/auth" in p for p in mounted_paths)
+    # Verify the auth and agents sub-routers are mounted under /api/v1.
+    # The OpenAPI schema is the canonical source for mounted paths.
+    openapi_paths = app.openapi()["paths"].keys()
+    assert any("/api/v1/agents" in p for p in openapi_paths), f"agents route not found in {openapi_paths}"
+    assert any("/api/v1/auth" in p for p in openapi_paths), f"auth route not found in {openapi_paths}"
