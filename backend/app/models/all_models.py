@@ -395,3 +395,51 @@ class APIKey(MultiTenantModel):
         "Organization",
         back_populates="api_keys"
     )
+
+
+class Tool(MultiTenantModel):
+    """A registered tool in the organization's tool registry.
+
+    The registry is tenant-scoped: every tool belongs to an organization and is
+    only ever resolved within that tenant (enforced by the repository layer and
+    the API boundary). ``tool_type`` selects the execution strategy that later
+    milestones (Tool Execution Engine, Function Calling) will dispatch on.
+
+    NOTE: the live ``tools`` table declares ``description`` and ``input_schema``
+    as NOT NULL, so the model always supplies a value (empty string / empty
+    object) even when the API call omits them.
+    """
+
+    __tablename__ = "tools"
+
+    # The live schema's id column carries no DB-side default (created before
+    # server_defaults were added), so the primary key is assigned explicitly.
+    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: str = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id"),
+        nullable=False,
+        index=True,
+    )
+    name: str = Column(String(100), nullable=False)
+    display_name: str = Column(String(255), nullable=False)
+    description: str = Column(Text, nullable=False, default="")
+    tool_type: str = Column(String(50), nullable=False)
+    config: Dict[str, Any] = Column(JSONB, default=dict)
+    input_schema: Dict[str, Any] = Column(JSONB, nullable=False, default=dict)
+    is_active: bool = Column(Boolean, default=True, nullable=True)
+
+    def __init__(self, organization_id: str, data: Dict[str, Any]):
+        org_id = (
+            organization_id
+            if isinstance(organization_id, uuid.UUID)
+            else uuid.UUID(str(organization_id))
+        )
+        self.organization_id = org_id
+        self.name = data.get("name", "")
+        self.display_name = data.get("display_name") or data.get("name", "")
+        self.description = data.get("description") or ""
+        self.tool_type = data.get("tool_type", "")
+        self.config = data.get("config") or {}
+        self.input_schema = data.get("input_schema") or {}
+        self.is_active = data.get("is_active", True)

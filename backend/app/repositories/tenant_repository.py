@@ -19,6 +19,7 @@ from app.models.all_models import (
     APIKey,
     OrganizationMember,
     ToolConfig,
+    Tool,
 )
 
 T = TypeVar('T', bound=Base)
@@ -256,6 +257,56 @@ class ToolConfigRepository(TenantAwareRepository[ToolConfig]):
         return self.db.execute(stmt).scalar_one_or_none()
 
 
+class ToolRepository(TenantAwareRepository[Tool]):
+    def __init__(self, db: Session, organization_id: uuid.UUID):
+        super().__init__(db, organization_id, Tool)
+
+    def get_by_name(self, name: str) -> Optional[Tool]:
+        """Find a tool by its unique (per-tenant) name."""
+        stmt = select(Tool).where(Tool.name == name)
+        stmt = self._apply_tenant_filter(stmt)
+        return self.db.execute(stmt).scalar_one_or_none()
+
+    def get_by_type(self, tool_type: str) -> List[Tool]:
+        """List tools of a specific type within the tenant."""
+        stmt = select(Tool).where(Tool.tool_type == tool_type)
+        stmt = self._apply_tenant_filter(stmt)
+        return list(self.db.execute(stmt).scalars().all())
+
+    def get_active(self) -> List[Tool]:
+        """List only the enabled tools within the tenant (discovery helper)."""
+        stmt = select(Tool).where(Tool.is_active.is_(True))
+        stmt = self._apply_tenant_filter(stmt)
+        return list(self.db.execute(stmt).scalars().all())
+
+    def find(
+        self,
+        tool_type: str = None,
+        is_active: bool = None,
+        search: str = None,
+    ) -> List[Tool]:
+        """Discover tools within the tenant using optional filters.
+
+        ``tool_type`` narrows by type, ``is_active`` by enabled state, and
+        ``search`` does a case-insensitive substring match across name,
+        display_name, and description.
+        """
+        stmt = select(Tool)
+        if tool_type is not None:
+            stmt = stmt.where(Tool.tool_type == tool_type)
+        if is_active is not None:
+            stmt = stmt.where(Tool.is_active.is_(is_active))
+        if search:
+            like = f"%{search}%"
+            stmt = stmt.where(
+                (Tool.name.ilike(like))
+                | (Tool.display_name.ilike(like))
+                | (Tool.description.ilike(like))
+            )
+        stmt = self._apply_tenant_filter(stmt)
+        return list(self.db.execute(stmt).scalars().all())
+
+
 # Factory for creating repositories
 class RepositoryFactory:
     """Factory for creating tenant-aware repositories."""
@@ -299,3 +350,6 @@ class RepositoryFactory:
 
     def tool_configs(self) -> ToolConfigRepository:
         return ToolConfigRepository(self.db, self.organization_id)
+
+    def tools(self) -> ToolRepository:
+        return ToolRepository(self.db, self.organization_id)
