@@ -158,11 +158,6 @@ class KnowledgeBaseRepository(TenantAwareRepository[KnowledgeBase]):
     def __init__(self, db: Session, organization_id: uuid.UUID):
         super().__init__(db, organization_id, KnowledgeBase)
 
-    def get_default(self) -> Optional[KnowledgeBase]:
-        stmt = select(KnowledgeBase).where(KnowledgeBase.default == True)
-        stmt = self._apply_tenant_filter(stmt)
-        return self.db.execute(stmt).scalar_one_or_none()
-
 
 class DocumentRepository(TenantAwareRepository[Document]):
     def __init__(self, db: Session, organization_id: uuid.UUID):

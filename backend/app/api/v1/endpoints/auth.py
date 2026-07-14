@@ -87,7 +87,6 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
             "description": "Default knowledge base for your organization",
         },
     )
-    kb.default = True
     db.add(kb)
 
     db.commit()
