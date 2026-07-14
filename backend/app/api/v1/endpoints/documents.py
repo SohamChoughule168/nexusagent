@@ -16,8 +16,10 @@ Reused, never duplicated:
 * auth + tenant context + RBAC hooks
 * ``settings`` for size / type limits
 
-This milestone stores document metadata + raw bytes only. No PDF parsing,
-text extraction, chunking, embeddings, or vector storage happens here.
+This milestone stores document metadata + raw bytes, and adds a processing
+step (``POST /documents/{id}/ingest``) that extracts text and splits it into
+``DocumentChunk`` rows using the owning knowledge base's chunk config. No
+embeddings or vector storage happen here -- that is the later RAG milestone.
 """
 import os
 import uuid
@@ -33,6 +35,7 @@ from app.core.database import get_db
 from app.models.all_models import Document
 from app.repositories.tenant_repository import RepositoryFactory
 from app.schemas.document import DocumentResponse
+from app.services.ingestion import ingest_document
 from app.services.tenant_context import TenantContext
 # Reuse the existing UUID-path validation helper rather than duplicating it.
 from app.api.v1.endpoints.knowledge_bases import _uuid_or_400
@@ -228,3 +231,47 @@ def delete_document(
     doc_repo.delete(doc)
     # Best-effort cleanup of the persisted raw bytes.
     _remove_file(storage_path)
+
+
+@documents_router.post(
+    "/documents/{document_id}/ingest",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_200_OK,
+)
+def ingest_document_endpoint(
+    document_id: str,
+    tenant: TenantContext = Depends(require_roles(*_WRITE_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Extract, chunk and index a previously uploaded document (ingestion).
+
+    This is the processing step that follows upload: it reads the document's
+    raw bytes from storage, extracts text, splits it into chunks using the
+    owning knowledge base's ``chunk_size`` / ``chunk_overlap`` / ``chunk_strategy``
+    config, persists ``DocumentChunk`` rows, and marks the document ``processed``
+    with its ``chunk_count``. No embeddings/vectors are produced here.
+
+    Tenant isolation is enforced by deriving ``organization_id`` from the
+    authenticated principal; a document in another org is invisible -> 404.
+    Write operations require owner/admin/member roles (viewers get 403).
+    """
+    doc_uuid = _uuid_or_400(document_id, "document_id")
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
+    doc_repo = repo_factory.documents()
+
+    doc = doc_repo.get(doc_uuid)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+
+    kb = repo_factory.knowledge_bases().get(uuid.UUID(str(doc.knowledge_base_id)))
+    if kb is None:
+        # Tenant isolation: a KB in another org (or a deleted KB) is invisible.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Knowledge base not found",
+        )
+
+    return ingest_document(db, tenant, doc, kb)

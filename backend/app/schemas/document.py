@@ -25,6 +25,7 @@ class DocumentResponse(BaseModel):
     status: str
     page_count: Optional[int] = None
     chunk_count: Optional[int] = None
+    error_message: Optional[str] = None
     upload_member_id: UUID
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
