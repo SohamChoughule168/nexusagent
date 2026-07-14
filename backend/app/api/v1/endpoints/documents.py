@@ -16,10 +16,14 @@ Reused, never duplicated:
 * auth + tenant context + RBAC hooks
 * ``settings`` for size / type limits
 
-This milestone stores document metadata + raw bytes, and adds a processing
-step (``POST /documents/{id}/ingest``) that extracts text and splits it into
-``DocumentChunk`` rows using the owning knowledge base's chunk config. No
-embeddings or vector storage happen here -- that is the later RAG milestone.
+This milestone stores document metadata + raw bytes, adds a processing step
+(``POST /documents/{id}/ingest``) that extracts text and splits it into
+``DocumentChunk`` rows, and adds vector storage + retrieval:
+``POST /documents/{id}/embed`` generates embeddings per chunk (stored on
+``DocumentChunk.embedding``) and ``GET /knowledge-bases/{id}/search`` ranks
+embedded chunks by cosine similarity. Embeddings use a pluggable provider
+(local deterministic offline, OpenAI-compatible when a key is configured);
+pgvector is the documented production upgrade (ADR-003).
 """
 import os
 import uuid
@@ -32,9 +36,10 @@ from sqlalchemy.orm import Session
 from app.core.auth_dependencies import get_tenant_context, require_roles
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.all_models import Document
+from app.models.all_models import Document, DocumentChunk
 from app.repositories.tenant_repository import RepositoryFactory
-from app.schemas.document import DocumentResponse
+from app.schemas.document import DocumentChunkResponse, DocumentResponse
+from app.services.embeddings import cosine_similarity, get_embedding_provider
 from app.services.ingestion import ingest_document
 from app.services.tenant_context import TenantContext
 # Reuse the existing UUID-path validation helper rather than duplicating it.
@@ -275,3 +280,135 @@ def ingest_document_endpoint(
         )
 
     return ingest_document(db, tenant, doc, kb)
+
+
+@documents_router.post(
+    "/documents/{document_id}/embed",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_200_OK,
+)
+def embed_document_endpoint(
+    document_id: str,
+    tenant: TenantContext = Depends(require_roles(*_WRITE_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Generate and store embeddings for a document's chunks (vector storage).
+
+    This is the step that follows ingestion: it loads the document's
+    ``DocumentChunk`` rows, computes a dense embedding vector for each via the
+    knowledge base's embedding provider (local deterministic embedder offline,
+    OpenAI-compatible API when a key is configured), persists the vectors on
+    ``DocumentChunk.embedding`` with an ``embedding_id``, and marks the document
+    ``indexed``. Retrieval (``GET /knowledge-bases/{id}/search``) then ranks
+    these chunks by cosine similarity.
+
+    Tenant isolation + RBAC mirror the upload/ingest endpoints: ``organization_id``
+    is derived from the principal and write roles (owner/admin/member) are
+    required; viewers receive 403.
+    """
+    doc_uuid = _uuid_or_400(document_id, "document_id")
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
+    doc_repo = repo_factory.documents()
+
+    doc = doc_repo.get(doc_uuid)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found",
+        )
+
+    kb = repo_factory.knowledge_bases().get(uuid.UUID(str(doc.knowledge_base_id)))
+    if kb is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Knowledge base not found",
+        )
+
+    chunk_repo = repo_factory.document_chunks()
+    chunks = chunk_repo.get_by_document(doc_uuid)
+    if not chunks:
+        # Nothing to embed: the document must be ingested first.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Document has no chunks; ingest it before embedding",
+        )
+
+    provider = get_embedding_provider(kb, settings)
+    contents = [c.content for c in chunks]
+    vectors = provider.embed(contents)
+
+    for chunk, vector in zip(chunks, vectors):
+        chunk.embedding = vector
+        chunk.embedding_id = str(uuid.uuid4())
+        chunk_repo.update(chunk)
+
+    doc.status = "indexed"
+    doc.meta = {
+        **(doc.meta or {}),
+        "embedding": {
+            "provider": type(provider).__name__,
+            "dimensions": provider.dimensions,
+            "chunk_count": len(chunks),
+        },
+    }
+    return doc_repo.update(doc)
+
+
+@kb_documents_router.get(
+    "/knowledge-bases/{knowledge_base_id}/search",
+    response_model=List[DocumentChunkResponse],
+)
+def search_knowledge_base(
+    knowledge_base_id: str,
+    q: Optional[str] = None,
+    top_k: int = 5,
+    tenant: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """Retrieve the most relevant document chunks for a query (RAG retrieval).
+
+    Embeds the query with the knowledge base's provider, then ranks the
+    knowledge base's embedded chunks by cosine similarity and returns the top-k.
+    Any authenticated tenant member may search (read access).
+
+    Tenant isolation is enforced: a knowledge base in another org is invisible
+    -> 404, and only this tenant's chunks are ranked.
+    """
+    if not q or not q.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Query parameter 'q' is required",
+        )
+    top_k = max(1, min(int(top_k), 20))
+
+    kb_uuid = _uuid_or_400(knowledge_base_id, "knowledge_base_id")
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
+    kb = repo_factory.knowledge_bases().get(kb_uuid)
+    if kb is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Knowledge base not found",
+        )
+
+    chunk_repo = repo_factory.document_chunks()
+    chunks = chunk_repo.get_by_knowledge_base(kb_uuid)
+    # Only chunks that have been embedded can be ranked.
+    embedded = [c for c in chunks if c.embedding]
+
+    provider = get_embedding_provider(kb, settings)
+    (query_vec,) = provider.embed([q])
+
+    scored = []
+    for chunk in embedded:
+        score = cosine_similarity(query_vec, chunk.embedding)
+        scored.append((score, chunk))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = scored[:top_k]
+
+    results = []
+    for score, chunk in top:
+        item = DocumentChunkResponse.model_validate(chunk)
+        item.score = score
+        results.append(item)
+    return results

@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     ANTHROPIC_API_KEY: Optional[str] = None
 
+    # Embeddings: "local" (deterministic, offline, default) or an
+    # OpenAI-compatible provider ("openai"/"openrouter"). The API provider is
+    # only used when this is set AND a corresponding API key is configured;
+    # otherwise the local embedder is used so the pipeline runs without keys.
+    EMBEDDINGS_PROVIDER: str = "local"
+
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost",

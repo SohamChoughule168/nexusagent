@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from sqlalchemy import Column, String, DateTime, Boolean, Text, Integer, Float, Enum, ForeignKey, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 from sqlalchemy.orm import relationship
 from app.models.base import Base, MultiTenantModel
 
@@ -192,6 +192,10 @@ class DocumentChunk(MultiTenantModel):
     page_number: int = Column(Integer)
     section_title: Optional[str] = Column(String(500))
     embedding_id: Optional[str] = Column(String(255))
+    # Dense embedding vector (offline/Milestone path: stored directly as a
+    # Postgres ``float[]``; production should migrate to pgvector for ANN
+    # indexing -- see ADR-003). Null until the chunk has been embedded.
+    embedding: Optional[List[float]] = Column(ARRAY(Float), nullable=True)
     meta: Dict[str, Any] = Column("metadata", JSONB, default=dict)
 
     # Relationships
