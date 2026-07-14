@@ -65,6 +65,11 @@ def _llm_enabled() -> bool:
     return False
 
 
+def rag_llm_enabled() -> bool:
+    """Public accessor: is the LLM answer path configured?"""
+    return _llm_enabled()
+
+
 def _build_context(scored: List[Tuple[DocumentChunk, float]]) -> str:
     parts = []
     for i, (chunk, _score) in enumerate(scored):
@@ -152,8 +157,103 @@ def compose_answer_offline(scored: List[Tuple[DocumentChunk, float]]) -> str:
     )
 
 
+def build_sources(scored: List[Tuple[DocumentChunk, float]]) -> List[dict]:
+    """Build serialisable source citations from scored chunks."""
+    return [
+        {
+            "chunk_id": str(chunk.id),
+            "document_id": str(chunk.document_id),
+            "score": score,
+            "snippet": (chunk.content or "")[:300],
+        }
+        for chunk, score in scored
+    ]
+
+
+def retrieve_chunks_for_query(
+    org_id: uuid.UUID,
+    db,
+    query: str,
+    top_k: int = 5,
+    kb_ids: Optional[List[uuid.UUID]] = None,
+) -> List[Tuple[DocumentChunk, float]]:
+    """Retrieve the top-k chunks for ``query`` across one or more KBs.
+
+    If ``kb_ids`` is provided, only those knowledge bases are searched;
+    otherwise all of the organization's knowledge bases are searched. Tenant
+    isolation is enforced by the tenant-scoped ``RepositoryFactory``.
+    """
+    repo_factory = RepositoryFactory(db, org_id)
+    if kb_ids:
+        kb_uuids = [uuid.UUID(str(k)) for k in kb_ids]
+    else:
+        kb_uuids = [kb.id for kb in repo_factory.knowledge_bases().get_all()]
+
+    candidates = []
+    for kb_id in kb_uuids:
+        chunks = repo_factory.document_chunks().get_by_knowledge_base(
+            uuid.UUID(str(kb_id))
+        )
+        candidates.extend(c for c in chunks if c.embedding)
+    if not candidates:
+        return []
+
+    provider = get_embedding_provider(None, settings)
+    (query_vec,) = provider.embed([query])
+    scored = [
+        (cosine_similarity(query_vec, c.embedding), c) for c in candidates
+    ]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [(c, s) for s, c in scored[:top_k]]
+
+
+async def stream_answer(
+    query: str,
+    scored: List[Tuple[DocumentChunk, float]],
+    model_name: Optional[str] = None,
+):
+    """Stream a grounded answer token-by-token from the LLM provider."""
+    context = _build_context(scored)
+    system = (
+        "You are a helpful assistant that answers questions using ONLY the "
+        "provided knowledge base context. Cite the relevant [Source N] numbers. "
+        "If the context does not contain the answer, say so clearly."
+    )
+    user = f"Context:\n{context}\n\nQuestion: {query}"
+
+    api_key = settings.OPENROUTER_API_KEY or settings.OPENAI_API_KEY
+    provider = OpenRouterProvider(
+        api_key=api_key,
+        base_url=settings.OPENROUTER_BASE_URL,
+    )
+    request = GenerationRequest(
+        messages=[
+            Message(role=MessageRole.SYSTEM, content=system),
+            Message(role=MessageRole.USER, content=user),
+        ],
+        model=model_name or settings.RAG_LLM_MODEL,
+        temperature=0.2,
+        max_tokens=512,
+        stream=True,
+    )
+    try:
+        async for chunk in provider.stream(request):
+            if chunk.delta_content:
+                yield chunk.delta_content
+    except Exception:
+        # On provider failure, fall back to the offline composer so the user
+        # still receives the retrieved context as the answer.
+        yield compose_answer_offline(scored)
+    finally:
+        await provider.close()
+
+
 __all__ = [
     "retrieve_chunks",
     "compose_answer",
     "compose_answer_offline",
+    "build_sources",
+    "retrieve_chunks_for_query",
+    "stream_answer",
+    "rag_llm_enabled",
 ]

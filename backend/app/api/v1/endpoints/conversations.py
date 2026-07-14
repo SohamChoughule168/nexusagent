@@ -2,17 +2,27 @@ import uuid
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.auth_dependencies import get_tenant_context
-from app.core.database import get_db
+from app.core.config import settings
+from app.core.database import get_db, db_session as db_session_ctx
 from app.models.all_models import Conversation, Message
 from app.repositories.tenant_repository import RepositoryFactory
 from app.schemas.conversation import (
+    ChatMessageRequest,
     ConversationCreate,
     ConversationResponse,
     MessageCreate,
     MessageResponse,
+)
+from app.services.rag import (
+    build_sources,
+    compose_answer_offline,
+    rag_llm_enabled,
+    retrieve_chunks_for_query,
+    stream_answer,
 )
 from app.services.tenant_context import TenantContext
 
@@ -146,3 +156,89 @@ def list_messages(
         )
 
     return messages_repo.get_by_conversation(conversation_id)
+
+
+@router.post("/{conversation_id}/chat")
+async def chat(
+    conversation_id: uuid.UUID,
+    payload: ChatMessageRequest,
+    tenant: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """Conversational RAG chat turn for a conversation.
+
+    Persists the user's message, retrieves the most relevant embedded chunks
+    from the organization's knowledge bases (optionally scoped via
+    ``knowledge_base_ids``), then streams a grounded answer (locally offline, or
+    via the configured LLM when ``RAG_LLM_PROVIDER`` + a key are set). The
+    assistant reply and its source citations are persisted after the stream.
+
+    Tenant isolation: the conversation, its agent, and the searched knowledge
+    bases are all resolved within the authenticated principal's organization.
+    """
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
+    conversation = repo_factory.conversations().get(conversation_id)
+    if conversation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+
+    agent = repo_factory.agents().get(uuid.UUID(str(conversation.agent_id)))
+    model = agent.model_name if agent else settings.RAG_LLM_MODEL
+
+    # Persist the user's message up front (tenant-scoped session).
+    user_msg = Message(
+        conversation_id=str(conversation_id),
+        organization_id=str(tenant.organization_id),
+        role="user",
+        content=payload.message,
+        token_count=len(payload.message.split()),
+    )
+    user_msg.id = uuid.uuid4()
+    repo_factory.messages().create(user_msg)
+
+    # Retrieve relevant chunks across the organization's knowledge bases.
+    kb_ids = (
+        [uuid.UUID(str(k)) for k in payload.knowledge_base_ids]
+        if payload.knowledge_base_ids
+        else None
+    )
+    scored = retrieve_chunks_for_query(
+        tenant.organization_id, db, payload.message, payload.top_k, kb_ids
+    )
+    citations = build_sources(scored)
+
+    async def event_stream():
+        parts: List[str] = []
+        if rag_llm_enabled() and scored:
+            async for delta in stream_answer(payload.message, scored, model):
+                parts.append(delta)
+                yield delta
+        else:
+            text = compose_answer_offline(scored)
+            parts.append(text)
+            yield text
+
+        # Persist the assistant reply + citations in a fresh session so it
+        # survives regardless of the request session lifecycle.
+        full = "".join(parts)
+        with db_session_ctx() as s:
+            rf = RepositoryFactory(s, tenant.organization_id)
+            assistant = Message(
+                conversation_id=str(conversation_id),
+                organization_id=str(tenant.organization_id),
+                role="assistant",
+                content=full,
+                citations={"sources": citations},
+                token_count=len(full.split()),
+            )
+            assistant.id = uuid.uuid4()
+            rf.messages().create(assistant)
+
+            conv = rf.conversations().get(conversation_id)
+            if conv is not None:
+                conv.message_count = (conv.message_count or 0) + 2
+                rf.conversations().update(conv)
+
+    return StreamingResponse(event_stream(), media_type="text/plain")

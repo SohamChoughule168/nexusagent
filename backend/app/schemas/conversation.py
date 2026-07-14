@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 
 
@@ -72,6 +72,14 @@ class MessageCreate(MessageBase):
     model_provider: Optional[str] = None
     model_name: Optional[str] = None
     cost_usd: float = 0.0
+
+
+class ChatMessageRequest(BaseModel):
+    """A chat turn: a user message plus optional retrieval scoping."""
+
+    message: str = Field(..., min_length=1)
+    knowledge_base_ids: Optional[List[uuid.UUID]] = None
+    top_k: int = Field(default=5, ge=1, le=20)
 
 
 class MessageResponse(MessageBase):
