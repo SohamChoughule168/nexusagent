@@ -1,3 +1,4 @@
+import json
 import uuid
 from typing import Any, Dict, List
 
@@ -32,7 +33,9 @@ from app.services.rag import (
     retrieve_chunks_for_query,
     stream_answer,
 )
+from app.services.agent_orchestrator import AgentOrchestrator
 from app.services.tenant_context import TenantContext
+from app.schemas.orchestrator import OrchestrateRequest
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -294,3 +297,176 @@ async def chat(
                 rf.conversations().update(conv)
 
     return StreamingResponse(event_stream(), media_type="text/plain")
+
+
+@router.post("/{conversation_id}/orchestrate")
+async def orchestrate(
+    conversation_id: uuid.UUID,
+    payload: OrchestrateRequest,
+    tenant: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """Run a multi-agent orchestrated task for a conversation (Milestone 4, Phase 4).
+
+    Plans (or reuses) a task decomposition across the tenant's agents, executes
+    the steps with sequential/parallel scheduling + per-step failure recovery,
+    and streams progress as newline-delimited JSON events. Each step output and
+    the final synthesised answer are persisted as assistant messages in the
+    conversation, so the orchestration trace lives alongside normal chat turns.
+
+    The orchestrator reuses the existing function-calling / tool-execution /
+    RAG pipeline per agent step and enforces tenant isolation at every boundary:
+    agents are resolved within ``organization_id`` and cross-tenant steps fail to
+    resolve (and are recovered, never executed).
+    """
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
+    conversation = repo_factory.conversations().get(conversation_id)
+    if conversation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+
+    agent = repo_factory.agents().get(uuid.UUID(str(conversation.agent_id)))
+
+    # Persist the user's goal as a user message (tenant-scoped session).
+    user_msg = Message(
+        conversation_id=str(conversation_id),
+        organization_id=str(tenant.organization_id),
+        role="user",
+        content=payload.goal,
+        token_count=len(payload.goal.split()),
+    )
+    user_msg.id = uuid.uuid4()
+    repo_factory.messages().create(user_msg)
+
+    orchestrator = AgentOrchestrator(tenant.organization_id, db)
+    result = await orchestrator.orchestrate(
+        payload.goal,
+        primary_agent=agent,
+        conversation_id=conversation_id,
+        halt_on_failure=payload.halt_on_failure,
+        max_retries=payload.max_retries,
+    )
+
+    # Persist each step output + the final answer as assistant messages, and
+    # surface NDJSON progress events to the client.
+    async def event_stream():
+        parts: List[str] = []
+
+        yield _ndjson(
+            "plan",
+            {
+                "goal": result.goal,
+                "status": result.status,
+                "steps": [vars(s) for s in result.plan.steps],
+            },
+        )
+
+        for step in result.step_results:
+            # Persist the step result as an assistant message in a fresh session
+            # so it survives regardless of the request session lifecycle.
+            with db_session_ctx() as s:
+                rf = RepositoryFactory(s, tenant.organization_id)
+                content = step.output or (step.error or "")
+                step_msg = Message(
+                    conversation_id=str(conversation_id),
+                    organization_id=str(tenant.organization_id),
+                    role="assistant",
+                    content=content,
+                    tool_calls={"calls": step.tool_calls} if step.tool_calls else {},
+                    tool_results={"results": step.tool_results} if step.tool_results else {},
+                )
+                step_msg.meta = {
+                    "orchestration": "step",
+                    "step_id": step.step_id,
+                    "agent_ref": step.agent_ref,
+                    "agent_id": step.agent_id,
+                    "status": step.status,
+                    "attempts": step.attempts,
+                }
+                step_msg.id = uuid.uuid4()
+                rf.messages().create(step_msg)
+
+                conv = rf.conversations().get(conversation_id)
+                if conv is not None:
+                    conv.message_count = (conv.message_count or 0) + 1
+                    rf.conversations().update(conv)
+
+            yield _ndjson(
+                "step_result",
+                {
+                    "step_id": step.step_id,
+                    "agent_ref": step.agent_ref,
+                    "status": step.status,
+                    "attempts": step.attempts,
+                    "output": step.output,
+                    "error": step.error,
+                    "error_type": step.error_type,
+                },
+            )
+
+        # Stream the final synthesised answer token-by-token.
+        final = result.final_answer or ""
+        for chunk in _chunk_text(final):
+            parts.append(chunk)
+            yield _ndjson("token", {"content": chunk})
+
+        # Persist the final answer message.
+        with db_session_ctx() as s:
+            rf = RepositoryFactory(s, tenant.organization_id)
+            final_msg = Message(
+                conversation_id=str(conversation_id),
+                organization_id=str(tenant.organization_id),
+                role="assistant",
+                content=final,
+            )
+            final_msg.meta = {"orchestration": "final", "status": result.status}
+            final_msg.id = uuid.uuid4()
+            rf.messages().create(final_msg)
+
+            conv = rf.conversations().get(conversation_id)
+            if conv is not None:
+                conv.message_count = (conv.message_count or 0) + 1
+                rf.conversations().update(conv)
+
+        yield _ndjson(
+            "done",
+            {
+                "status": result.status,
+                "final_answer": final,
+                "step_results": [_step_result_dict(s) for s in result.step_results],
+            },
+        )
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+
+
+def _ndjson(event_type: str, data: Dict[str, Any]) -> str:
+    """Serialize one orchestration progress event as an NDJSON line."""
+    return json.dumps({"type": event_type, "data": data}) + "\n"
+
+
+def _chunk_text(text: str, size: int = 24) -> List[str]:
+    """Split text into small chunks for token-style streaming."""
+    if not text:
+        return []
+    return [text[i : i + size] for i in range(0, len(text), size)]
+
+
+def _step_result_dict(step: Any) -> Dict[str, Any]:
+    """Return a JSON-serialisable view of a :class:`PlanStepResult`."""
+    return {
+        "step_id": step.step_id,
+        "agent_ref": step.agent_ref,
+        "agent_id": step.agent_id,
+        "status": step.status,
+        "output": step.output,
+        "error": step.error,
+        "error_type": step.error_type,
+        "attempts": step.attempts,
+        "tool_calls": step.tool_calls,
+        "tool_results": step.tool_results,
+        "depends_on": step.depends_on,
+        "duration_ms": step.duration_ms,
+    }
