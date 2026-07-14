@@ -75,6 +75,13 @@ class Settings(BaseSettings):
     # otherwise the local embedder is used so the pipeline runs without keys.
     EMBEDDINGS_PROVIDER: str = "local"
 
+    # RAG answer generation: "local" (offline composer that returns the most
+    # relevant retrieved context, default) or "openrouter"/"openai" to call a
+    # real LLM for grounded answers. The LLM is only used when this is set AND
+    # a key is configured; otherwise the local composer keeps it testable.
+    RAG_LLM_PROVIDER: str = "local"
+    RAG_LLM_MODEL: str = "openai/gpt-4o-mini"
+
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost",

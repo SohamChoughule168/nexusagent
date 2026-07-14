@@ -39,8 +39,10 @@ from app.core.database import get_db
 from app.models.all_models import Document, DocumentChunk
 from app.repositories.tenant_repository import RepositoryFactory
 from app.schemas.document import DocumentChunkResponse, DocumentResponse
+from app.schemas.rag import RAGQueryRequest, RAGQueryResponse
 from app.services.embeddings import cosine_similarity, get_embedding_provider
 from app.services.ingestion import ingest_document
+from app.services.rag import compose_answer, retrieve_chunks
 from app.services.tenant_context import TenantContext
 # Reuse the existing UUID-path validation helper rather than duplicating it.
 from app.api.v1.endpoints.knowledge_bases import _uuid_or_400
@@ -412,3 +414,55 @@ def search_knowledge_base(
         item.score = score
         results.append(item)
     return results
+
+
+@kb_documents_router.post(
+    "/knowledge-bases/{knowledge_base_id}/query",
+    response_model=RAGQueryResponse,
+)
+async def query_knowledge_base(
+    knowledge_base_id: str,
+    payload: RAGQueryRequest,
+    tenant: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """Answer a question using the knowledge base (RAG query).
+
+    Retrieves the most relevant embedded chunks for the question, then composes
+    a grounded answer (locally offline, or via the configured LLM when
+    ``RAG_LLM_PROVIDER`` + a key are set). Returns the answer plus its sources.
+    Any authenticated tenant member may query (read access).
+
+    Tenant isolation: a knowledge base in another org is invisible -> 404, and
+    only this tenant's chunks are retrieved/ranked.
+    """
+    q = payload.question
+    if not q or not q.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Question is required",
+        )
+    top_k = max(1, min(int(payload.top_k), 20))
+
+    kb_uuid = _uuid_or_400(knowledge_base_id, "knowledge_base_id")
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
+    kb = repo_factory.knowledge_bases().get(kb_uuid)
+    if kb is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Knowledge base not found",
+        )
+
+    scored = retrieve_chunks(kb, q, db, tenant.organization_id, top_k)
+    answer = await compose_answer(q, scored)
+
+    sources = [
+        {
+            "chunk_id": chunk.id,
+            "document_id": chunk.document_id,
+            "score": score,
+            "snippet": (chunk.content or "")[:300],
+        }
+        for chunk, score in scored
+    ]
+    return RAGQueryResponse(answer=answer, sources=sources)
