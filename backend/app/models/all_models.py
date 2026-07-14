@@ -138,11 +138,14 @@ class KnowledgeBase(MultiTenantModel):
 
 class Document(MultiTenantModel):
     __tablename__ = "documents"
-    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
+    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     knowledge_base_id: str = Column(UUID(as_uuid=True), ForeignKey("knowledge_bases.id"), nullable=False, index=True)
     organization_id: str = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
-    title: str = Column(String(255), nullable=False)
+    # ``filename`` is required by the live ``documents`` table (NOT NULL) and
+    # stores the original upload name (the on-disk name lives in storage_path).
+    filename: str = Column(String(255), nullable=False)
     original_filename: str = Column(String(255), nullable=False)
+    title: Optional[str] = Column(String(255))
     mime_type: str = Column(String(100), nullable=False)
     file_size: int = Column(Integer, nullable=False)
     storage_path: str = Column(String(500), nullable=False)
@@ -150,6 +153,8 @@ class Document(MultiTenantModel):
     page_count: int = Column(Integer, default=0)
     chunk_count: int = Column(Integer, default=0)
     error_message: Optional[str] = Column(Text)
+    # NOTE: the attribute is named ``meta`` (not ``metadata``) because
+    # ``metadata`` is reserved by SQLAlchemy's declarative Base.
     meta: Dict[str, Any] = Column("metadata", JSONB, default=dict)
     upload_member_id: str = Column(UUID(as_uuid=True), nullable=False)  # Reference to User.id
 
@@ -158,18 +163,21 @@ class Document(MultiTenantModel):
     knowledge_base = relationship("KnowledgeBase", back_populates="documents")
     document_chunks = relationship("DocumentChunk", back_populates="document")
 
-    def __init__(self, organization_id: str, data: Dict[str, Any]):
-        self.knowledge_base_id = uuid.UUID(data.get("knowledge_base_id", ""))
-        self.organization_id = uuid.UUID(organization_id)
-        self.title = data.get("title", "")
+    def __init__(self, organization_id, data: Dict[str, Any]):
+        org_id = organization_id if isinstance(organization_id, uuid.UUID) else uuid.UUID(str(organization_id))
+        self.organization_id = org_id
+        self.knowledge_base_id = uuid.UUID(str(data.get("knowledge_base_id")))
+        self.filename = data.get("filename") or data.get("original_filename", "")
         self.original_filename = data.get("original_filename", "")
+        self.title = data.get("title")
         self.mime_type = data.get("mime_type", "")
-        self.file_size = data.get("file_size", 0)
+        self.file_size = int(data.get("file_size") or 0)
         self.storage_path = data.get("storage_path", "")
         self.status = data.get("status", "uploaded")
-        self.error_message = data.get("error_message", "")
-        self.meta = data.get("metadata", {})
-        self.upload_member_id = data.get("upload_member_id", "").split('-')[0] if data.get("upload_member_id") else ""
+        self.error_message = data.get("error_message")
+        self.meta = data.get("metadata") or {}
+        up = data.get("upload_member_id")
+        self.upload_member_id = uuid.UUID(str(up)) if up else None
 
 
 class DocumentChunk(MultiTenantModel):

@@ -20,3 +20,6 @@ venv/
 .idea/
 .vscode/
 .DS_Store
+
+# Uploaded document storage (runtime artifacts)
+storage/

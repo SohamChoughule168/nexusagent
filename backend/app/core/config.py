@@ -122,6 +122,12 @@ class Settings(BaseSettings):
     ALLOWED_EXTENSIONS: List[str] = [
         "pdf", "doc", "docx", "txt", "csv", "html", "md", "json"
     ]
+    # MIME types accepted by the Document Upload API this milestone. PDF only
+    # for now ("PDF initially"); widen as later milestones add parsers.
+    ALLOWED_MIME_TYPES: List[str] = ["application/pdf"]
+    # Local directory where uploaded raw bytes are persisted (metadata only;
+    # no parsing/extraction this milestone). Created on demand.
+    UPLOAD_STORAGE_DIR: str = str(ROOT_DIR / "storage" / "uploads")
 
     # Cost Tracking
     ENABLE_COST_TRACKING: bool = True
