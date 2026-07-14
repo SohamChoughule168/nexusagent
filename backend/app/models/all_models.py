@@ -33,7 +33,7 @@ class KeyValueSettings(MultiTenantModel):
 class OrganizationMember(MultiTenantModel):
     __tablename__ = "organization_members"
 
-    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
+    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: str = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     user_id: str = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     role: str = Column(String(20), nullable=False)  # 'owner', 'admin', 'member', 'viewer'
@@ -111,7 +111,7 @@ class Agent(MultiTenantModel):
 
 class KnowledgeBase(MultiTenantModel):
     __tablename__ = "knowledge_bases"
-    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
+    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id: str = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     name: str = Column(String(255), nullable=False)
     description: Optional[str] = Column(Text)

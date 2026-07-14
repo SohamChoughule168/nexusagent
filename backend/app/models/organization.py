@@ -11,7 +11,7 @@ from app.models.base import MultiTenantModel
 class Organization(MultiTenantModel):
     __tablename__ = "organizations"
 
-    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
+    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: str = Column(String(255), nullable=False)
     slug: str = Column(String(100), unique=True, nullable=False, index=True)
     logo_url: Optional[str] = Column(String(500))

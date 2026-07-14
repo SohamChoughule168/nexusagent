@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Optional
+import uuid
 
 from sqlalchemy import Column, UUID, DateTime, Text, String, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB as PGJSONB
@@ -15,7 +16,16 @@ class TimestampedModel(Base):
 
     __abstract__ = True
 
-    id = Column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    # Python-side default guarantees a PK is always populated even when the
+    # underlying migration omitted a DB-level server_default (the live schema
+    # was created before server_defaults were added), while the server_default
+    # keeps raw SQL inserts consistent. Explicit ids supplied in code win.
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
+    )
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True),

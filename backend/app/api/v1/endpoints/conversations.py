@@ -4,6 +4,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.auth_dependencies import get_tenant_context
 from app.core.database import get_db
 from app.models.all_models import Conversation, Message
 from app.repositories.tenant_repository import RepositoryFactory
@@ -13,6 +14,7 @@ from app.schemas.conversation import (
     MessageCreate,
     MessageResponse,
 )
+from app.services.tenant_context import TenantContext
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -35,15 +37,14 @@ def _uuid_or_400(value: str, field: str) -> uuid.UUID:
 )
 def create_conversation(
     conversation_data: ConversationCreate,
-    organization_id: uuid.UUID,
+    tenant: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
-    """Create a new conversation."""
-    # NOTE: Tenant scoping is enforced in later milestones. organization_id is
-    # supplied here as a stand-in for the authenticated principal until the
-    # auth/RBAC dependency is wired in.
-    # TODO: Add auth dependency to derive organization_id from the authenticated principal.
-    repo_factory = RepositoryFactory(db, organization_id)
+    """Create a new conversation for the authenticated principal's tenant."""
+    # Tenant isolation is enforced by deriving organization_id from the
+    # authenticated principal (see app.core.auth_dependencies), never from
+    # request data.
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
     conversations_repo = repo_factory.conversations()
 
     agent_id = _uuid_or_400(conversation_data.agent_id, "agent_id")
@@ -55,7 +56,7 @@ def create_conversation(
         )
 
     conversation = Conversation(
-        organization_id=organization_id,
+        organization_id=tenant.organization_id,
         agent_id=agent_id,
         session_id=conversation_data.session_id,
         user_identifier=conversation_data.user_identifier,
@@ -72,13 +73,11 @@ def create_conversation(
 
 @router.get("/", response_model=List[ConversationResponse])
 def list_conversations(
-    organization_id: uuid.UUID,
+    tenant: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
-    """List conversations for the current context."""
-    # NOTE: Tenant scoping is enforced in later milestones.
-    # TODO: Add auth dependency to derive organization_id from the authenticated principal.
-    repo_factory = RepositoryFactory(db, organization_id)
+    """List conversations for the authenticated principal's tenant."""
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
     conversations_repo = repo_factory.conversations()
     return conversations_repo.get_all()
 
@@ -91,13 +90,11 @@ def list_conversations(
 def create_message(
     conversation_id: uuid.UUID,
     message_data: MessageCreate,
-    organization_id: uuid.UUID,
+    tenant: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
-    """Add a message to a conversation."""
-    # NOTE: Tenant scoping is enforced in later milestones.
-    # TODO: Add auth dependency to derive organization_id from the authenticated principal.
-    repo_factory = RepositoryFactory(db, organization_id)
+    """Add a message to a conversation in the authenticated principal's tenant."""
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
     conversations_repo = repo_factory.conversations()
     messages_repo = repo_factory.messages()
 
@@ -110,7 +107,7 @@ def create_message(
 
     message = Message(
         conversation_id=str(conversation_id),
-        organization_id=str(organization_id),
+        organization_id=str(tenant.organization_id),
         role=message_data.role,
         content=message_data.content,
         token_count=message_data.token_count or 0,
@@ -133,13 +130,11 @@ def create_message(
 )
 def list_messages(
     conversation_id: uuid.UUID,
-    organization_id: uuid.UUID,
+    tenant: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
-    """List messages for a conversation."""
-    # NOTE: Tenant scoping is enforced in later milestones.
-    # TODO: Add auth dependency to derive organization_id from the authenticated principal.
-    repo_factory = RepositoryFactory(db, organization_id)
+    """List messages for a conversation in the authenticated principal's tenant."""
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
     conversations_repo = repo_factory.conversations()
     messages_repo = repo_factory.messages()
 

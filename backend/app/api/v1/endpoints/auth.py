@@ -20,6 +20,7 @@ from app.core.security import (
     get_user_role,
 )
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.repositories.tenant_repository import RepositoryFactory
 from app.models.user import User
 from app.models.organization import Organization
@@ -35,6 +36,8 @@ from app.schemas.auth import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+logger = get_logger(__name__)
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
@@ -69,8 +72,8 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
 
     # Create organization membership (owner)
     member = OrganizationMember(
-        organization_id=org.id,
-        user_id=user.id,
+        organization_id=str(org.id),
+        user_id=str(user.id),
         role="owner",
     )
     db.add(member)
@@ -78,16 +81,26 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
     # Create default knowledge base
     from app.models.all_models import KnowledgeBase
     kb = KnowledgeBase(
-        organization_id=org.id,
-        name="Default Knowledge Base",
-        description="Default knowledge base for your organization",
-        default=True,
+        organization_id=str(org.id),
+        data={
+            "name": "Default Knowledge Base",
+            "description": "Default knowledge base for your organization",
+        },
     )
+    kb.default = True
     db.add(kb)
 
     db.commit()
     db.refresh(user)
     db.refresh(org)
+
+    logger.info(
+        "user_registered",
+        user_id=str(user.id),
+        organization_id=str(org.id),
+        email=user.email,
+        role="owner",
+    )
 
     # Generate tokens
     access_token = create_access_token(user.id, org.id)
@@ -114,6 +127,11 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     user = db.query(User).filter(User.email == form_data.username).first()
 
     if not user or not verify_password(form_data.password, user.password_hash):
+        logger.warning(
+            "login_failed",
+            email=form_data.username,
+            reason="invalid_credentials",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -138,6 +156,14 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         )
 
     org = db.query(Organization).filter(Organization.id == member.organization_id).first()
+
+    logger.info(
+        "user_login",
+        user_id=str(user.id),
+        organization_id=str(org.id),
+        email=user.email,
+        role=member.role,
+    )
 
     # Update last login
     from datetime import datetime
@@ -274,7 +300,7 @@ def list_api_keys(db: Session = Depends(get_db)):
 
 
 # Dependencies for auth
-def get_current_user(token: str = Depends(None), db: Session = Depends(get_db)) -> User:
-    """Get current user from access token."""
-    # This would be a proper dependency in production
-    pass
+# The production auth dependency lives in app.core.auth_dependencies
+# (get_current_user / get_tenant_context / require_roles) and is wired into
+# the protected endpoints (conversations, agents, etc.).
+from app.core.auth_dependencies import get_current_user, get_tenant_context, require_roles  # noqa: E402,F401

@@ -1,7 +1,13 @@
 """Conversation API tests (Milestone 3).
 
-Style mirrors the existing ``test_tenant_isolation.py`` / ``test_milestone1.py``:
-real database session fixture, ``TestClient(app)`` from ``app.main``, and
+Every conversation endpoint is now protected: ``organization_id`` is derived
+from the authenticated principal via ``app.core.auth_dependencies`` rather than
+accepted from the request. These tests register a real user (which yields a
+valid JWT + organization), create an agent in that organization, and exercise
+the conversation endpoints with a ``Bearer`` token.
+
+Style mirrors ``test_tenant_isolation.py`` / ``test_milestone1.py``: real
+database session fixture, ``TestClient(app)`` from ``app.main``, and
 organization/agent created per-test for FK integrity.
 """
 import uuid
@@ -10,16 +16,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models.user import User
-from app.models.organization import Organization
-from app.models.all_models import (
-    Agent,
-    Conversation,
-    Message,
-    OrganizationMember,
-)
+from app.models.all_models import Agent, Conversation, Message
 
 API_PREFIX = "/api/v1/conversations"
+AUTH_PREFIX = "/api/v1/auth"
 
 
 @pytest.fixture
@@ -39,28 +39,39 @@ def db_session():
         db.close()
 
 
-@pytest.fixture
-def org_and_agent(db_session):
-    """Create an organization, owner user, and a real agent for FK integrity."""
-    org_id = uuid.uuid4()
-    user_id = uuid.uuid4()
-
-    org = Organization(id=str(org_id), name=f"Org {org_id}", slug=f"org-{org_id}")
-    user = User(
-        id=str(user_id),
-        email=f"owner-{user_id}@example.com",
-        is_active=True,
-        password_hash="$argon2id$v=19$m=65536,t=3,p=4$...",
+def _register(client: TestClient):
+    """Register a user and return (access_token, organization_id)."""
+    email = f"owner-{uuid.uuid4()}@example.com"
+    resp = client.post(
+        f"{AUTH_PREFIX}/register",
+        json={
+            "email": email,
+            "password": "TestPass#123",
+            "full_name": "Owner",
+            "organization_name": f"Org {uuid.uuid4()}",
+            "organization_slug": f"org-{uuid.uuid4()}",
+        },
     )
-    db_session.add_all([org, user])
-    db_session.flush()
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    return body["access_token"], body["user"]["organization_id"]
+
+
+def _auth_headers(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def auth_org_agent(client, db_session):
+    """Register an owner, create a real agent in their org for FK integrity."""
+    token, org_id = _register(client)
 
     agent = Agent(
-        organization_id=str(org_id),
+        organization_id=org_id,
         data={
             "name": "Test Agent",
             "system_prompt": "You are a test agent.",
-            "public_id": f"test-agent-{org_id}",
+            "public_id": f"test-agent-{uuid.uuid4()}",
         },
     )
     # The Agent model overrides the base `id` without a server_default, so an
@@ -68,18 +79,10 @@ def org_and_agent(db_session):
     # it only reads them via the repository, so this does not affect endpoints).
     agent.id = uuid.uuid4()
     db_session.add(agent)
-
-    member = OrganizationMember(
-        organization_id=str(org_id),
-        user_id=str(user_id),
-        role="owner",
-    )
-    member.id = uuid.uuid4()
-    db_session.add(member)
     db_session.commit()
     db_session.refresh(agent)
 
-    yield str(org_id), str(agent.id)
+    yield token, org_id, str(agent.id)
 
     # Cleanup: conversations/messages created via the API first, then fixtures.
     db_session.query(Message).filter(Message.organization_id == org_id).delete(
@@ -88,10 +91,7 @@ def org_and_agent(db_session):
     db_session.query(Conversation).filter(
         Conversation.organization_id == org_id
     ).delete(synchronize_session=False)
-    db_session.delete(member)
     db_session.delete(agent)
-    db_session.delete(user)
-    db_session.delete(org)
     db_session.commit()
 
 
@@ -100,15 +100,24 @@ def org_and_agent(db_session):
 # ---------------------------------------------------------------------------
 
 
-def test_create_conversation_returns_201(client, org_and_agent):
-    org_id, agent_id = org_and_agent
+def test_create_conversation_requires_authentication(client):
+    payload = {"agent_id": str(uuid.uuid4()), "session_id": f"session-{uuid.uuid4()}"}
+    # No bearer token -> 401.
+    response = client.post(f"{API_PREFIX}/", json=payload)
+    assert response.status_code == 401
+
+
+def test_create_conversation_returns_201(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
     payload = {
         "agent_id": agent_id,
         "session_id": f"session-{uuid.uuid4()}",
         "user_identifier": "tester@example.com",
         "status": "active",
     }
-    response = client.post(f"{API_PREFIX}/?organization_id={org_id}", json=payload)
+    response = client.post(
+        f"{API_PREFIX}/", json=payload, headers=_auth_headers(token)
+    )
     assert response.status_code == 201
 
     body = response.json()
@@ -119,67 +128,49 @@ def test_create_conversation_returns_201(client, org_and_agent):
     assert "id" in body
 
 
-def test_create_conversation_defaults_status(client, org_and_agent):
-    org_id, agent_id = org_and_agent
+def test_create_conversation_defaults_status(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
     payload = {
         "agent_id": agent_id,
         "session_id": f"session-{uuid.uuid4()}",
     }
-    response = client.post(f"{API_PREFIX}/?organization_id={org_id}", json=payload)
+    response = client.post(
+        f"{API_PREFIX}/", json=payload, headers=_auth_headers(token)
+    )
     assert response.status_code == 201
     assert response.json()["status"] == "active"
 
 
-def test_create_conversation_requires_organization_id(client, org_and_agent):
-    _, agent_id = org_and_agent
-    payload = {
-        "agent_id": agent_id,
-        "session_id": f"session-{uuid.uuid4()}",
-    }
-    # Missing required query parameter -> 422 (FastAPI validation).
-    response = client.post(f"{API_PREFIX}/", json=payload)
-    assert response.status_code == 422
-
-
-def test_create_conversation_invalid_organization_id(client, org_and_agent):
-    _, agent_id = org_and_agent
-    payload = {
-        "agent_id": agent_id,
-        "session_id": f"session-{uuid.uuid4()}",
-    }
-    response = client.post(
-        f"{API_PREFIX}/?organization_id=not-a-uuid", json=payload
-    )
-    assert response.status_code == 422
-
-
-def test_create_conversation_validation_error_missing_session(client, org_and_agent):
-    org_id, agent_id = org_and_agent
+def test_create_conversation_validation_error_missing_session(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
     # session_id is required on ConversationCreate.
     response = client.post(
-        f"{API_PREFIX}/?organization_id={org_id}",
-        json={"agent_id": agent_id},
+        f"{API_PREFIX}/", json={"agent_id": agent_id}, headers=_auth_headers(token)
     )
     assert response.status_code == 422
 
 
-def test_create_conversation_invalid_agent_id(client, org_and_agent):
-    org_id, _ = org_and_agent
+def test_create_conversation_invalid_agent_id(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
     payload = {
         "agent_id": "not-a-uuid",
         "session_id": f"session-{uuid.uuid4()}",
     }
-    response = client.post(f"{API_PREFIX}/?organization_id={org_id}", json=payload)
+    response = client.post(
+        f"{API_PREFIX}/", json=payload, headers=_auth_headers(token)
+    )
     assert response.status_code == 400
 
 
-def test_create_conversation_unknown_agent_404(client, org_and_agent):
-    org_id, _ = org_and_agent
+def test_create_conversation_unknown_agent_404(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
     payload = {
         "agent_id": str(uuid.uuid4()),
         "session_id": f"session-{uuid.uuid4()}",
     }
-    response = client.post(f"{API_PREFIX}/?organization_id={org_id}", json=payload)
+    response = client.post(
+        f"{API_PREFIX}/", json=payload, headers=_auth_headers(token)
+    )
     assert response.status_code == 404
 
 
@@ -188,23 +179,25 @@ def test_create_conversation_unknown_agent_404(client, org_and_agent):
 # ---------------------------------------------------------------------------
 
 
-def test_list_conversations_empty(client, org_and_agent):
-    org_id, _ = org_and_agent
-    response = client.get(f"{API_PREFIX}/?organization_id={org_id}")
+def test_list_conversations_empty(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
+    response = client.get(f"{API_PREFIX}/", headers=_auth_headers(token))
     assert response.status_code == 200
     assert response.json() == []
 
 
-def test_list_conversations_returns_created(client, org_and_agent):
-    org_id, agent_id = org_and_agent
+def test_list_conversations_returns_created(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
     payload = {
         "agent_id": agent_id,
         "session_id": f"session-{uuid.uuid4()}",
     }
-    create = client.post(f"{API_PREFIX}/?organization_id={org_id}", json=payload)
+    create = client.post(
+        f"{API_PREFIX}/", json=payload, headers=_auth_headers(token)
+    )
     assert create.status_code == 201
 
-    response = client.get(f"{API_PREFIX}/?organization_id={org_id}")
+    response = client.get(f"{API_PREFIX}/", headers=_auth_headers(token))
     assert response.status_code == 200
     body = response.json()
     assert isinstance(body, list)
@@ -212,34 +205,32 @@ def test_list_conversations_returns_created(client, org_and_agent):
     assert body[0]["id"] == create.json()["id"]
 
 
-def test_list_conversations_requires_organization_id(client, org_and_agent):
-    response = client.get(f"{API_PREFIX}/")
-    assert response.status_code == 422
-
-
 # ---------------------------------------------------------------------------
 # POST /conversations/{id}/messages
 # ---------------------------------------------------------------------------
 
 
-def _create_conversation(client, org_id, agent_id):
+def _create_conversation(client, token, agent_id):
     payload = {
         "agent_id": agent_id,
         "session_id": f"session-{uuid.uuid4()}",
     }
-    response = client.post(f"{API_PREFIX}/?organization_id={org_id}", json=payload)
+    response = client.post(
+        f"{API_PREFIX}/", json=payload, headers=_auth_headers(token)
+    )
     assert response.status_code == 201
     return response.json()["id"]
 
 
-def test_create_message_returns_201(client, org_and_agent):
-    org_id, agent_id = org_and_agent
-    conversation_id = _create_conversation(client, org_id, agent_id)
+def test_create_message_returns_201(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
+    conversation_id = _create_conversation(client, token, agent_id)
 
     payload = {"role": "user", "content": "Hello there"}
     response = client.post(
-        f"{API_PREFIX}/{conversation_id}/messages?organization_id={org_id}",
+        f"{API_PREFIX}/{conversation_id}/messages",
         json=payload,
+        headers=_auth_headers(token),
     )
     assert response.status_code == 201
     body = response.json()
@@ -250,35 +241,38 @@ def test_create_message_returns_201(client, org_and_agent):
     assert "id" in body
 
 
-def test_create_message_invalid_conversation_id(client, org_and_agent):
-    org_id, _ = org_and_agent
+def test_create_message_invalid_conversation_id(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
     payload = {"role": "user", "content": "Hello"}
     # Invalid path UUID -> 422 (FastAPI validation).
     response = client.post(
-        f"{API_PREFIX}/not-a-uuid/messages?organization_id={org_id}",
+        f"{API_PREFIX}/not-a-uuid/messages",
         json=payload,
+        headers=_auth_headers(token),
     )
     assert response.status_code == 422
 
 
-def test_create_message_unknown_conversation_404(client, org_and_agent):
-    org_id, _ = org_and_agent
+def test_create_message_unknown_conversation_404(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
     payload = {"role": "user", "content": "Hello"}
     response = client.post(
-        f"{API_PREFIX}/{uuid.uuid4()}/messages?organization_id={org_id}",
+        f"{API_PREFIX}/{uuid.uuid4()}/messages",
         json=payload,
+        headers=_auth_headers(token),
     )
     assert response.status_code == 404
 
 
-def test_create_message_requires_organization_id(client, org_and_agent):
-    org_id, agent_id = org_and_agent
-    conversation_id = _create_conversation(client, org_id, agent_id)
+def test_create_message_requires_authentication(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
+    conversation_id = _create_conversation(client, token, agent_id)
     payload = {"role": "user", "content": "Hello"}
+    # No token -> 401 even though the conversation exists.
     response = client.post(
         f"{API_PREFIX}/{conversation_id}/messages", json=payload
     )
-    assert response.status_code == 422
+    assert response.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -286,30 +280,31 @@ def test_create_message_requires_organization_id(client, org_and_agent):
 # ---------------------------------------------------------------------------
 
 
-def test_list_messages_empty(client, org_and_agent):
-    org_id, agent_id = org_and_agent
-    conversation_id = _create_conversation(client, org_id, agent_id)
+def test_list_messages_empty(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
+    conversation_id = _create_conversation(client, token, agent_id)
 
     response = client.get(
-        f"{API_PREFIX}/{conversation_id}/messages?organization_id={org_id}"
+        f"{API_PREFIX}/{conversation_id}/messages", headers=_auth_headers(token)
     )
     assert response.status_code == 200
     assert response.json() == []
 
 
-def test_list_messages_returns_created(client, org_and_agent):
-    org_id, agent_id = org_and_agent
-    conversation_id = _create_conversation(client, org_id, agent_id)
+def test_list_messages_returns_created(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
+    conversation_id = _create_conversation(client, token, agent_id)
 
     payload = {"role": "assistant", "content": "Hi! How can I help?"}
     created = client.post(
-        f"{API_PREFIX}/{conversation_id}/messages?organization_id={org_id}",
+        f"{API_PREFIX}/{conversation_id}/messages",
         json=payload,
+        headers=_auth_headers(token),
     )
     assert created.status_code == 201
 
     response = client.get(
-        f"{API_PREFIX}/{conversation_id}/messages?organization_id={org_id}"
+        f"{API_PREFIX}/{conversation_id}/messages", headers=_auth_headers(token)
     )
     assert response.status_code == 200
     body = response.json()
@@ -319,25 +314,18 @@ def test_list_messages_returns_created(client, org_and_agent):
     assert body[0]["role"] == "assistant"
 
 
-def test_list_messages_invalid_conversation_id(client, org_and_agent):
-    org_id, _ = org_and_agent
+def test_list_messages_invalid_conversation_id(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
     # Invalid path UUID -> 422 (FastAPI validation).
     response = client.get(
-        f"{API_PREFIX}/not-a-uuid/messages?organization_id={org_id}"
+        f"{API_PREFIX}/not-a-uuid/messages", headers=_auth_headers(token)
     )
     assert response.status_code == 422
 
 
-def test_list_messages_unknown_conversation_404(client, org_and_agent):
-    org_id, _ = org_and_agent
+def test_list_messages_unknown_conversation_404(client, auth_org_agent):
+    token, org_id, agent_id = auth_org_agent
     response = client.get(
-        f"{API_PREFIX}/{uuid.uuid4()}/messages?organization_id={org_id}"
+        f"{API_PREFIX}/{uuid.uuid4()}/messages", headers=_auth_headers(token)
     )
     assert response.status_code == 404
-
-
-def test_list_messages_requires_organization_id(client, org_and_agent):
-    org_id, agent_id = org_and_agent
-    conversation_id = _create_conversation(client, org_id, agent_id)
-    response = client.get(f"{API_PREFIX}/{conversation_id}/messages")
-    assert response.status_code == 422
