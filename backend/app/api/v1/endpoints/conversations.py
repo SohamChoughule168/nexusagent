@@ -34,6 +34,7 @@ from app.services.rag import (
     stream_answer,
 )
 from app.services.agent_orchestrator import AgentOrchestrator
+from app.services.conversation_memory import ConversationMemoryService
 from app.services.tenant_context import TenantContext
 from app.schemas.orchestrator import OrchestrateRequest
 
@@ -224,6 +225,15 @@ async def chat(
     agent_system_prompt = agent.system_prompt if agent else None
     model_provider = agent.model_provider if agent else "openrouter"
 
+    # Conversation Memory (Milestone 5, Phase 1): inject the conversation's
+    # prior history into the LLM prompt, applying token budgeting first so the
+    # combined prompt stays within the model's context window. Retrieval above
+    # intentionally uses the raw query; only the *generation* prompt is enriched.
+    memory = ConversationMemoryService(db, tenant.organization_id)
+    enhanced_query, _history_messages = memory.inject_conversation_history(
+        conversation_id, payload.message
+    )
+
     async def event_stream():
         parts: List[str] = []
         # Persisted on the assistant message: the executed tool calls / results.
@@ -238,9 +248,9 @@ async def chat(
         if function_calling_enabled(tenant.organization_id, db, agent):
             try:
                 tools = discover_tools(tenant.organization_id, db, agent)
-                selected = auto_select_tools(payload.message, tools)
+                selected = auto_select_tools(enhanced_query, tools)
                 fc = await run_function_calling(
-                    payload.message,
+                    enhanced_query,
                     tenant.organization_id,
                     db,
                     model,
@@ -263,7 +273,7 @@ async def chat(
                 parts.append(text)
                 yield text
         elif rag_llm_enabled() and scored:
-            async for delta in stream_answer(payload.message, scored, model):
+            async for delta in stream_answer(enhanced_query, scored, model):
                 parts.append(delta)
                 yield delta
         else:

@@ -62,6 +62,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.all_models import Agent
 from app.repositories.tenant_repository import RepositoryFactory
+from app.services.conversation_memory import ConversationMemoryService
 from app.services.function_calling import (
     discover_tools,
     function_calling_enabled,
@@ -342,6 +343,7 @@ class AgentOrchestrator:
         db: Any = None,
         max_retries: int = _DEFAULT_MAX_RETRIES,
         agents: Optional[List[Agent]] = None,
+        conversation_id: Any = None,
     ):
         self.organization_id = organization_id
         self.db = db
@@ -349,6 +351,13 @@ class AgentOrchestrator:
         self._agents_override = list(agents) if agents is not None else None
         self._agents_repo = (
             RepositoryFactory(db, organization_id).agents() if db is not None else None
+        )
+        # Conversation Memory (Milestone 5, Phase 1): reuse the memory service so
+        # every agent step prompt can be enriched with prior conversation history
+        # (with token budgeting) instead of duplicating persistence logic.
+        self.conversation_id = conversation_id
+        self._memory = (
+            ConversationMemoryService(db, organization_id) if db is not None else None
         )
 
     # --- Public API ---------------------------------------------------------
@@ -378,6 +387,19 @@ class AgentOrchestrator:
             halt_on_failure=halt_on_failure,
             max_retries=max_retries,
         )
+
+    def _with_history(self, text: str) -> str:
+        """Prepend conversation history (token-budgeted) to ``text``.
+
+        Returns ``text`` unchanged when memory is unavailable or no conversation
+        is bound, so offline / conversation-less runs are unaffected.
+        """
+        if self._memory is not None and self.conversation_id is not None:
+            enhanced, _ = self._memory.inject_conversation_history(
+                self.conversation_id, text
+            )
+            return enhanced
+        return text
 
     async def plan_task(
         self,
@@ -446,6 +468,8 @@ class AgentOrchestrator:
         """Execute ``plan``, running ready steps concurrently with retry and
         failure recovery. Returns the aggregate ``OrchestrationResult``.
         """
+        if conversation_id is not None:
+            self.conversation_id = conversation_id
         started = _now()
         retries = max_retries if max_retries is not None else self.max_retries
 
@@ -636,6 +660,10 @@ class AgentOrchestrator:
         """
         instruction = step.instruction or goal
         user_content = self._step_user_prompt(goal, instruction, dep_context)
+        # Conversation Memory (Milestone 5, Phase 1): inject prior conversation
+        # history into the step prompt (token-budgeted) so each agent step is
+        # grounded in the ongoing conversation.
+        user_content = self._with_history(user_content)
 
         # Reuse the exact chat + function-calling pipeline (tools, RAG, engine).
         if self.db is not None and function_calling_enabled(

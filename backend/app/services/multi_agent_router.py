@@ -71,6 +71,7 @@ from app.services.agent_orchestrator import (
     PlanStep,
     TaskPlan,
 )
+from app.services.conversation_memory import ConversationMemoryService
 from app.services.function_calling import (
     discover_tools,
     function_calling_enabled,
@@ -657,6 +658,7 @@ class MultiAgentRouter:
         db: Any = None,
         selector: Optional[AgentSelector] = None,
         agents: Optional[List[Agent]] = None,
+        conversation_id: Any = None,
     ):
         self.organization_id = organization_id
         self.db = db
@@ -664,6 +666,13 @@ class MultiAgentRouter:
         self._agents_override = list(agents) if agents is not None else None
         self._agents_repo = (
             RepositoryFactory(db, organization_id).agents() if db is not None else None
+        )
+        # Conversation Memory (Milestone 5, Phase 1): reuse the memory service so
+        # routing/dispatch can inject prior conversation history (with token
+        # budgeting) into agent prompts without duplicating persistence logic.
+        self.conversation_id = conversation_id
+        self._memory = (
+            ConversationMemoryService(db, organization_id) if db is not None else None
         )
 
     # --- Public API ---------------------------------------------------------
@@ -693,6 +702,14 @@ class MultiAgentRouter:
         """
         started = _now()
         agents = self._list_agents()
+
+        # Conversation Memory (Milestone 5, Phase 1): remember which conversation
+        # this turn belongs to (route() may supply it even if the constructor did
+        # not) and prepend its history to the query with token budgeting applied,
+        # so every dispatched agent prompt carries prior context.
+        if conversation_id is not None:
+            self.conversation_id = conversation_id
+        query = self._with_history(query)
 
         if not agents:
             return RouterResult(
@@ -745,6 +762,20 @@ class MultiAgentRouter:
         return result
 
     # --- Agent listing / resolution ----------------------------------------
+
+    def _with_history(self, query: str) -> str:
+        """Prepend conversation history (token-budgeted) to ``query``.
+
+        Returns ``query`` unchanged when memory is unavailable or no
+        conversation is bound, so offline / conversation-less routing is
+        unaffected.
+        """
+        if self._memory is not None and self.conversation_id is not None:
+            enhanced, _ = self._memory.inject_conversation_history(
+                self.conversation_id, query
+            )
+            return enhanced
+        return query
 
     def _list_agents(self) -> List[Agent]:
         if self._agents_override is not None:
@@ -899,12 +930,16 @@ class MultiAgentRouter:
         ]
         plan = TaskPlan(goal=query, steps=steps)
         orch = AgentOrchestrator(
-            self.organization_id, self.db, max_retries=max_retries
+            self.organization_id,
+            self.db,
+            max_retries=max_retries,
+            conversation_id=self.conversation_id,
         )
         orch_result = await orch.execute_plan(
             plan,
             query,
             primary_agent=primary_agent,
+            conversation_id=self.conversation_id,
             halt_on_failure=halt_on_failure,
             max_retries=max_retries,
         )
