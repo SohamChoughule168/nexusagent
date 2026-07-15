@@ -54,7 +54,7 @@ def _register(client: TestClient):
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    return body["access_token"], body["user"]["organization_id"]
+    return body["access_token"], body["user"]["organization_id"], body["user"]["id"]
 
 
 def _auth_headers(token: str) -> dict:
@@ -102,7 +102,7 @@ def test_protected_endpoint_rejects_malformed_token(client):
 
 
 def test_protected_endpoint_accepts_valid_token(client, db_session):
-    token, org_id = _register(client)
+    token, org_id, _user_id = _register(client)
     agent_id = _make_agent(db_session, org_id)
 
     payload = {"agent_id": agent_id, "session_id": f"s-{uuid.uuid4()}"}
@@ -122,7 +122,7 @@ def test_protected_endpoint_accepts_valid_token(client, db_session):
 
 def test_protected_endpoint_isolates_tenants(client, db_session):
     # Owner A creates a conversation in their org.
-    token_a, org_a = _register(client)
+    token_a, org_a, _user_id_a = _register(client)
     agent_a = _make_agent(db_session, org_a)
     conv_id = (
         client.post(
@@ -134,7 +134,7 @@ def test_protected_endpoint_isolates_tenants(client, db_session):
     )
 
     # Owner B (a different org, but a perfectly valid token) must not see it.
-    token_b, _org_b = _register(client)
+    token_b, _org_b, _user_id_b = _register(client)
     response = client.get(
         f"{API_PREFIX}/{conv_id}/messages", headers=_auth_headers(token_b)
     )
@@ -147,9 +147,9 @@ def test_protected_endpoint_isolates_tenants(client, db_session):
 
 
 def test_inactive_user_token_rejected(client, db_session):
-    token, org_id = _register(client)
-    # Look up the registered user and deactivate it.
-    user = db_session.query(User).filter(User.email.like("owner-%")).order_by(User.created_at.desc()).first()
+    token, org_id, user_id = _register(client)
+    # Look up the registered user by its primary key and deactivate it.
+    user = db_session.query(User).filter(User.id == uuid.UUID(user_id)).first()
     assert user is not None
     user.is_active = False
     db_session.commit()
