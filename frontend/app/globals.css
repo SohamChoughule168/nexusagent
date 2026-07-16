@@ -57,3 +57,156 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Markdown message rendering (components/chat/markdown.tsx)
+ * Plain CSS (no typography plugin) so headings/lists/tables render cleanly.
+ * ------------------------------------------------------------------------- */
+.markdown {
+  font-size: 0.875rem;
+  line-height: 1.625;
+  color: hsl(var(--foreground));
+  word-break: break-word;
+}
+.markdown > * + * {
+  margin-top: 0.75rem;
+}
+.markdown h1 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+.markdown h2 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+}
+.markdown h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-top: 0.75rem;
+  margin-bottom: 0.375rem;
+}
+.markdown ul {
+  list-style: disc;
+  padding-left: 1.25rem;
+}
+.markdown ol {
+  list-style: decimal;
+  padding-left: 1.25rem;
+}
+.markdown li {
+  margin-top: 0.25rem;
+}
+.markdown li > * + * {
+  margin-top: 0.25rem;
+}
+.markdown a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown blockquote {
+  border-left: 2px solid hsl(var(--border));
+  padding-left: 0.75rem;
+  color: hsl(var(--muted-foreground));
+  font-style: italic;
+}
+.markdown code:not(pre code) {
+  border-radius: 4px;
+  background: hsl(var(--muted));
+  padding: 0.125rem 0.375rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+}
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid hsl(var(--border));
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+}
+.markdown th {
+  font-weight: 600;
+}
+.markdown hr {
+  border: 0;
+  border-top: 1px solid hsl(var(--border));
+  margin: 1rem 0;
+}
+.markdown pre {
+  background: transparent !important;
+  padding: 0;
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * highlight.js token theme for .code-block (dark, GitHub-dark inspired).
+ * Rehype-highlight adds `hljs*` classes inside <code>; these color them.
+ * ------------------------------------------------------------------------- */
+.code-block .hljs {
+  color: #c9d1d9;
+  background: transparent;
+}
+.code-block .hljs-comment,
+.code-block .hljs-quote {
+  color: #8b949e;
+  font-style: italic;
+}
+.code-block .hljs-keyword,
+.code-block .hljs-selector-tag,
+.code-block .hljs-built_in,
+.code-block .hljs-name,
+.code-block .hljs-tag {
+  color: #ff7b72;
+}
+.code-block .hljs-string,
+.code-block .hljs-title,
+.code-block .hljs-section,
+.code-block .hljs-attribute,
+.code-block .hljs-literal,
+.code-block .hljs-template-tag,
+.code-block .hljs-template-variable,
+.code-block .hljs-type,
+.code-block .hljs-addition {
+  color: #a5d6ff;
+}
+.code-block .hljs-number,
+.code-block .hljs-symbol,
+.code-block .hljs-bullet,
+.code-block .hljs-link {
+  color: #79c0ff;
+}
+.code-block .hljs-deletion {
+  color: #ffa198;
+}
+.code-block .hljs-emphasis {
+  font-style: italic;
+}
+.code-block .hljs-strong {
+  font-weight: 700;
+}
+.code-block .hljs-meta {
+  color: #d2a8ff;
+}
+.code-block .hljs-attr,
+.code-block .hljs-variable,
+.code-block .hljs-params {
+  color: #ffa657;
+}
+.code-block .hljs-function .hljs-title {
+  color: #d2a8ff;
+}
+.code-block .hljs-regexp,
+.code-block .hljs-operator {
+  color: #79c0ff;
+}
+.code-block .hljs-punctuation {
+  color: #c9d1d9;
+}

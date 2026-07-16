@@ -26,9 +26,11 @@ describe("Sidebar (layout)", () => {
     );
   });
 
-  it("renders upcoming areas as disabled (Phase 2+)", () => {
+  it("renders the Chat link as an active, navigable route", () => {
     render(<Sidebar />);
-    expect(screen.getByText("Chat").closest("div")).toHaveAttribute(
+    const chatLink = screen.getByText("Chat").closest("a");
+    expect(chatLink).toHaveAttribute("href", "/chat");
+    expect(screen.getByText("Chat").closest("div")).not.toHaveAttribute(
       "aria-disabled",
       "true",
     );

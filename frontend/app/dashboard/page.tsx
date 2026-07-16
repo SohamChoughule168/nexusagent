@@ -8,6 +8,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
 
 /**
@@ -32,12 +33,26 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <Link href="/chat" className="transition-transform hover:-translate-y-0.5">
+          <Card className="h-full opacity-100 hover:border-primary/50">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Chat</CardTitle>
+                <Badge variant="default">Ready</Badge>
+              </div>
+              <CardDescription>
+                Conversation interface with your agents.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Open the chat workspace.
+              </p>
+            </CardContent>
+          </Card>
+        </Link>
+
         {[
-          {
-            title: "Chat",
-            description: "Conversation interface with your agents.",
-            phase: "Phase 2",
-          },
           {
             title: "Knowledge Base",
             description: "Manage documents and retrieval sources.",

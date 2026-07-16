@@ -21,7 +21,7 @@ interface NavItem {
  */
 const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/chat", label: "Chat", icon: MessageSquare, disabled: true },
+  { href: "/chat", label: "Chat", icon: MessageSquare },
   {
     href: "/knowledge-bases",
     label: "Knowledge Base",
@@ -100,7 +100,7 @@ export function Sidebar({ className }: SidebarProps) {
       </nav>
 
       <div className="border-t p-4 text-xs text-muted-foreground">
-        {env.appName} · Milestone 6 Phase 1
+        {env.appName} · Milestone 6 Phase 2
       </div>
     </aside>
   );

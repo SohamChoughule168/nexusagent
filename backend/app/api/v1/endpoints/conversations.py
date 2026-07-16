@@ -16,6 +16,7 @@ from app.schemas.conversation import (
     ChatMessageRequest,
     ConversationCreate,
     ConversationResponse,
+    ConversationUpdate,
     MessageCreate,
     MessageResponse,
 )
@@ -104,6 +105,64 @@ def list_conversations(
     repo_factory = RepositoryFactory(db, tenant.organization_id)
     conversations_repo = repo_factory.conversations()
     return conversations_repo.get_all()
+
+
+@router.put("/{conversation_id}", response_model=ConversationResponse)
+def update_conversation(
+    conversation_id: uuid.UUID,
+    update: ConversationUpdate,
+    tenant: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """Update a conversation's editable fields within the tenant.
+
+    Reuses the existing ``ConversationUpdate`` schema (``summary``, ``status``,
+    ``user_identifier``, ``user_metadata``). The frontend maps its "Rename
+    conversation" action onto ``summary`` (the conversation's display title),
+    since ``Conversation`` carries no separate title column.
+    """
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
+    conversations_repo = repo_factory.conversations()
+
+    conversation = conversations_repo.get(conversation_id)
+    if conversation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+
+    # Only mutate fields present in the request body.
+    update_fields = update.model_dump(exclude_unset=True)
+    for field, value in update_fields.items():
+        setattr(conversation, field, value)
+
+    return conversations_repo.update(conversation)
+
+
+@router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_conversation(
+    conversation_id: uuid.UUID,
+    tenant: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """Delete a conversation (and its messages) within the tenant."""
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
+    conversations_repo = repo_factory.conversations()
+
+    conversation = conversations_repo.get(conversation_id)
+    if conversation is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+
+    # Remove child messages first to satisfy the FK from ``messages`` ->
+    # ``conversations`` (no DB-level cascade is configured).
+    messages_repo = repo_factory.messages()
+    for message in messages_repo.get_by_conversation(conversation_id):
+        messages_repo.delete(message)
+
+    conversations_repo.delete(conversation)
 
 
 @router.post(
