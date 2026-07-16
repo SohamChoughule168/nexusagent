@@ -318,6 +318,36 @@ class LongTermMemoryService:
         )
         return True
 
+    # --- Consolidation (Phase 2.4) ---------------------------------------
+
+    def consolidate_memories(
+        self,
+        similarity_threshold: float = 0.95,
+        limit: int = 100,
+        offset: int = 0,
+    ):
+        """Detect and merge duplicate memories in this tenant (Phase 2.4).
+
+        Thin wrapper over ``MemoryConsolidationService`` -- kept here so existing
+        holders of this service get consolidation for free, exactly like the
+        semantic-retrieval wrappers. Tenant isolation and the write-time embedder
+        are reused (delegated to the same ``LocalDeterministicEmbedder`` instance
+        that stored the vectors), so no new vector database or scoring path is
+        created and the existing semantic retrieval / conversation memory paths
+        are untouched.
+
+        Returns:
+            A ``ConsolidationResult`` describing the merge pass.
+        """
+        from app.services.memory_consolidation import MemoryConsolidationService
+
+        consolidator = MemoryConsolidationService(
+            self.db, self.organization_id, embedder=self._embedder
+        )
+        return consolidator.consolidate_memories(
+            similarity_threshold=similarity_threshold, limit=limit, offset=offset
+        )
+
 
 # Convenience function for dependency injection
 def get_long_term_memory_service(db_session, organization_id: UUID) -> LongTermMemoryService:
