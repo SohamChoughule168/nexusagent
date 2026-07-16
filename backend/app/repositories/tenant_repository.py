@@ -20,6 +20,7 @@ from app.models.all_models import (
     OrganizationMember,
     ToolConfig,
     Tool,
+    Memory,
 )
 
 T = TypeVar('T', bound=Base)
@@ -307,6 +308,54 @@ class ToolRepository(TenantAwareRepository[Tool]):
         return list(self.db.execute(stmt).scalars().all())
 
 
+class MemoryRepository(TenantAwareRepository[Memory]):
+    def __init__(self, db: Session, organization_id: uuid.UUID):
+        super().__init__(db, organization_id, Memory)
+
+    def get_by_key(self, key: str) -> Optional[Memory]:
+        """Fetch a memory by its stable per-tenant key (None if absent)."""
+        stmt = select(Memory).where(Memory.key == key)
+        stmt = self._apply_tenant_filter(stmt)
+        return self.db.execute(stmt).scalar_one_or_none()
+
+    def get_by_category(self, category: str) -> List[Memory]:
+        """List all memories in the tenant with the given category."""
+        stmt = select(Memory).where(Memory.category == category)
+        stmt = self._apply_tenant_filter(stmt)
+        return list(self.db.execute(stmt).scalars().all())
+
+    def search_content(self, query: str) -> List[Memory]:
+        """Keyword (non-semantic) substring search over memory content.
+
+        Case-insensitive. Semantic/vector retrieval is deferred to Phase 2.3.
+        """
+        like = f"%{query}%"
+        stmt = select(Memory).where(Memory.content.ilike(like))
+        stmt = self._apply_tenant_filter(stmt)
+        return list(self.db.execute(stmt).scalars().all())
+
+    def list_memories(
+        self,
+        category: Optional[str] = None,
+        key: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Memory]:
+        """List memories for the tenant with optional category/key filters."""
+        stmt = select(Memory)
+        if category is not None:
+            stmt = stmt.where(Memory.category == category)
+        if key is not None:
+            stmt = stmt.where(Memory.key == key)
+        stmt = self._apply_tenant_filter(stmt)
+        stmt = (
+            stmt.limit(limit)
+            .offset(offset)
+            .order_by(Memory.created_at.desc())
+        )
+        return list(self.db.execute(stmt).scalars().all())
+
+
 # Factory for creating repositories
 class RepositoryFactory:
     """Factory for creating tenant-aware repositories."""
@@ -353,3 +402,6 @@ class RepositoryFactory:
 
     def tools(self) -> ToolRepository:
         return ToolRepository(self.db, self.organization_id)
+
+    def memories(self) -> MemoryRepository:
+        return MemoryRepository(self.db, self.organization_id)

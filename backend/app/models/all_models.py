@@ -443,3 +443,85 @@ class Tool(MultiTenantModel):
         self.config = data.get("config") or {}
         self.input_schema = data.get("input_schema") or {}
         self.is_active = data.get("is_active", True)
+
+
+class Memory(MultiTenantModel):
+    """A tenant-scoped long-term memory (Milestone 5, Phase 2.2).
+
+    Long-term memories are stored *independently of conversation history* so
+    important facts, preferences, and instructions survive across sessions and
+    conversations. Every memory is pinned to an ``organization_id`` (tenant key)
+    and inherits the repository-layer's tenant isolation.
+
+    Vector-reuse note: ``embedding`` reuses the existing vector-storage
+    architecture (``DocumentChunk.embedding`` -> Postgres ``float[]``) and is
+    populated by the deterministic local embedder at write time. Semantic
+    *retrieval* over this column is intentionally deferred to Phase 2.3; for now
+    memories are retrieved by key, category, or keyword (non-semantic).
+
+    ``importance`` and ``meta`` are reserved columns: they exist now so later
+    phases (ranking, consolidation) can populate and act on them without a
+    schema migration. They are not yet used by any logic.
+
+    ``agent_id``/``user_id`` are optional scoping hints (e.g. a memory learned
+    during a specific agent's conversation) kept modular for later reuse; they
+    do not affect tenant isolation, which always keys off ``organization_id``.
+    """
+
+    __tablename__ = "memories"
+
+    # ``id`` (UUID PK) and ``created_at``/``updated_at`` timestamps are inherited
+    # from ``MultiTenantModel``; they are intentionally not redeclared here.
+    organization_id: str = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id"),
+        nullable=False,
+        index=True,
+    )
+    agent_id: Optional[str] = Column(
+        UUID(as_uuid=True),
+        ForeignKey("agents.id"),
+        nullable=True,
+        index=True,
+    )
+    user_id: Optional[str] = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=True,
+        index=True,
+    )
+    content: str = Column(Text, nullable=False)
+    category: Optional[str] = Column(String(255))  # e.g. 'fact', 'preference', 'instruction'
+    key: Optional[str] = Column(String(255), index=True)  # stable per-tenant lookup key
+    importance: int = Column(Integer, default=0, nullable=False)
+    # Offline/Milestone path: dense vector mirrored from DocumentChunk.embedding
+    # (Postgres ``float[]``). Null until written by the embedder.
+    embedding: Optional[List[float]] = Column(ARRAY(Float), nullable=True)
+    # NOTE: attribute named ``meta`` (not ``metadata``); ``metadata`` is reserved
+    # by SQLAlchemy's declarative Base. Holds consolidation/ranking hints later.
+    meta: Dict[str, Any] = Column("metadata", JSONB, default=dict)
+
+    def __init__(
+        self,
+        organization_id: str,
+        content: str,
+        category: Optional[str] = None,
+        key: Optional[str] = None,
+        importance: int = 0,
+        agent_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
+        org_id = (
+            organization_id
+            if isinstance(organization_id, uuid.UUID)
+            else uuid.UUID(str(organization_id))
+        )
+        self.organization_id = org_id
+        self.content = content
+        self.category = category
+        self.key = key
+        self.importance = importance
+        self.agent_id = uuid.UUID(str(agent_id)) if agent_id else None
+        self.user_id = uuid.UUID(str(user_id)) if user_id else None
+        self.meta = metadata or {}
