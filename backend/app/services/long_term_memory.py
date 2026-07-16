@@ -44,6 +44,11 @@ from app.core.logging import get_logger
 from app.models.all_models import Memory
 from app.repositories.tenant_repository import RepositoryFactory
 from app.services.embeddings import LocalDeterministicEmbedder
+from app.services.memory_ranking import (
+    MemoryRanker,
+    RankingConfig,
+    RankingWeights,
+)
 from app.services.semantic_memory import SemanticMemoryRetriever
 
 logger = get_logger(__name__)
@@ -235,6 +240,75 @@ class LongTermMemoryService:
     def count(self) -> int:
         """Count memories in this tenant."""
         return self.repository_factory.memories().count()
+
+    # --- Weighted ranking (Phase 2.5) -------------------------------------
+
+    def rank_memories(
+        self,
+        query: Optional[str] = None,
+        top_k: Optional[int] = None,
+        config: Optional[RankingConfig] = None,
+        category: Optional[str] = None,
+        agent_id: Optional[UUID] = None,
+        now=None,
+    ) -> List[Memory]:
+        """Rank this tenant's long-term memories by a weighted score.
+
+        Phase 2.5: ranks memories by a configurable weighted combination of
+        semantic similarity (reusing the ``embedding`` column Phase 2.2 wrote
+        and the cosine scoring Phase 2.3 used), ``importance``, and recency.
+        Tenant isolation and the write-time embedder are reused (the same
+        ``LocalDeterministicEmbedder`` instance that stored the vectors), so **no
+        new vector database is created** and scores stay consistent with storage.
+
+        Thin wrapper over ``MemoryRanker`` -- kept here so existing holders of
+        this service get weighted ranking for free. The engine fetches candidates
+        tenant-scoped through ``RepositoryFactory``, preserving isolation.
+
+        Args:
+            now: Optional reference time for recency decay (defaults to the
+                current UTC time). Injectable so callers/tests control recency.
+
+        Returns:
+            The ranked ``Memory`` objects (highest score first), optionally
+            truncated to ``top_k``.
+        """
+        ranker = MemoryRanker(
+            self.db, self.organization_id, embedder=self._embedder, config=config
+        )
+        return ranker.rank_memories(
+            query, top_k=top_k, config=config, category=category,
+            agent_id=agent_id, now=now,
+        )
+
+    def rank_memories_scored(
+        self,
+        query: Optional[str] = None,
+        top_k: Optional[int] = None,
+        config: Optional[RankingConfig] = None,
+        category: Optional[str] = None,
+        agent_id: Optional[UUID] = None,
+        now=None,
+    ) -> List:
+        """Like ``rank_memories`` but returns ``RankedMemory`` detail.
+
+        Each returned item is a ``RankedMemory`` carrying the decomposed
+        semantic / importance / recency scores plus the total weighted score,
+        for callers that want explainability (e.g. logging why a memory ranked
+        first). Named ``rank_memories_scored`` to match the
+        ``retrieve_semantic_scored`` naming convention.
+
+        Args:
+            now: Optional reference time for recency decay (defaults to the
+                current UTC time).
+        """
+        ranker = MemoryRanker(
+            self.db, self.organization_id, embedder=self._embedder, config=config
+        )
+        return ranker.rank(
+            query, top_k=top_k, config=config, category=category,
+            agent_id=agent_id, now=now,
+        )
 
     # --- Update -----------------------------------------------------------
 
