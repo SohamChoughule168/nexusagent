@@ -11,10 +11,10 @@ It reuses existing architecture and never duplicates services:
   ``organization_id``. Tenant isolation is inherited, not re-implemented.
 * **Vector storage architecture** -- memories carry a dense ``embedding``
   column (Postgres ``float[]``, mirrored from ``DocumentChunk.embedding``) that
-  is populated by the existing deterministic local embedder. This reuses the
-  embedding/vector-storage machinery; *semantic retrieval* over the column is
-  deliberately deferred to Phase 2.3, so for now retrieval is by key, category,
-  or keyword.
+  is populated by the existing deterministic local embedder. Semantic retrieval
+  over this column is implemented in Phase 2.3 (see ``semantic_memory.py`` and
+  ``retrieve_semantic``) *without* a new vector database: candidates are ranked
+  in Python by cosine similarity over the existing column.
 * **ConversationMemoryService** -- complements short-term conversation history;
   long-term memory is the durable layer beneath it.
 
@@ -25,8 +25,12 @@ Deliverables for Phase 2.2:
 4. ``get_memory`` / ``list_memories`` / ``get_by_key`` / ``search_by_content``
    -- retrieve memories (non-semantic: key, category, keyword).
 
+Semantic (vector) retrieval is provided by Phase 2.3: ``retrieve_semantic`` /
+``retrieve_semantic_scored`` (and the standalone ``SemanticMemoryRetriever``).
+It reuses the ``embedding`` column populated at write time and ranks by cosine
+similarity; it requires no new vector database.
+
 Explicitly out of scope for Phase 2.2 (reserved columns/fields exist for them):
-* semantic/vector retrieval (``embedding`` populated, not queried yet)
 * importance-based ranking (``importance`` column reserved, unused)
 * consolidation (``meta`` column reserved, unused)
 """
@@ -40,6 +44,7 @@ from app.core.logging import get_logger
 from app.models.all_models import Memory
 from app.repositories.tenant_repository import RepositoryFactory
 from app.services.embeddings import LocalDeterministicEmbedder
+from app.services.semantic_memory import SemanticMemoryRetriever
 
 logger = get_logger(__name__)
 
@@ -165,9 +170,67 @@ class LongTermMemoryService:
     def search_by_content(self, query: str) -> List[Memory]:
         """Keyword (non-semantic) substring search over memory content.
 
-        Semantic/vector retrieval over ``embedding`` is deferred to Phase 2.3.
+        Complements (does not replace) semantic retrieval added in Phase 2.3;
+        the two retrieval paths coexist and can be used together.
         """
         return self.repository_factory.memories().search_content(query)
+
+    # --- Semantic retrieval (Phase 2.3) -----------------------------------
+
+    def retrieve_semantic(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_similarity: float = -1.0,
+        category: Optional[str] = None,
+        agent_id: Optional[UUID] = None,
+    ) -> List[Memory]:
+        """Semantic (vector) retrieval over this tenant's long-term memories.
+
+        Phase 2.3: ranks memories by cosine similarity of the query to each
+        memory's ``embedding`` (written in Phase 2.2) and returns the top-K most
+        relevant memories. Tenant isolation and the write-time embedder are
+        reused (the same ``LocalDeterministicEmbedder`` instance that stored the
+        vectors), so **no new vector database is created** and scores stay
+        consistent with storage.
+
+        ``min_similarity`` is an optional relevance floor (default ``-1.0`` so
+        the top-K path always returns the K best-ranked memories; pass a higher
+        value to drop weakly/negatively correlated matches).
+
+        Thin wrapper over ``SemanticMemoryRetriever`` -- kept here so existing
+        holders of this service get semantic retrieval for free.
+        """
+        retriever = SemanticMemoryRetriever(
+            self.db, self.organization_id, embedder=self._embedder
+        )
+        return retriever.retrieve(
+            query,
+            top_k=top_k,
+            min_similarity=min_similarity,
+            category=category,
+            agent_id=agent_id,
+        )
+
+    def retrieve_semantic_scored(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_similarity: float = -1.0,
+        category: Optional[str] = None,
+        agent_id: Optional[UUID] = None,
+    ) -> List[tuple]:
+        """Like ``retrieve_semantic`` but returns ``(Memory, score)`` pairs."""
+        retriever = SemanticMemoryRetriever(
+            self.db, self.organization_id, embedder=self._embedder
+        )
+        return retriever.retrieve_scored(
+            query,
+            top_k=top_k,
+            min_similarity=min_similarity,
+            category=category,
+            agent_id=agent_id,
+        )
 
     def count(self) -> int:
         """Count memories in this tenant."""
