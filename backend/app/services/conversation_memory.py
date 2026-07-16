@@ -54,6 +54,24 @@ _RESERVE_TOKENS = 500
 # Approximate characters-per-token for the offline heuristic (English text).
 _CHARS_PER_TOKEN = 4
 
+# --- Summary engine (Milestone5, Phase2.1) --------------------------------
+# Cheap, fast model used for summarization by default. Overridable per call.
+_SUMMARY_DEFAULT_MODEL = "anthropic/claude-3.5-haiku"
+# Fraction of the context-token budget handed to *recent* history when a summary
+# already exists. The summary covers earlier turns, so the budget is spent on
+# the freshest messages instead of resending old ones.
+_SUMMARY_RECENT_WINDOW_RATIO = 0.6
+# Default thresholds that trigger (re)summarization of a conversation.
+_SUMMARY_DEFAULT_MESSAGE_THRESHOLD = 20
+_SUMMARY_DEFAULT_TOKEN_THRESHOLD = 2000
+
+_SUMMARY_SYSTEM_PROMPT = (
+    "You are a conversation summarizer. Produce a concise, factual summary of "
+    "the conversation so far. Preserve key facts, the user's intent, any "
+    "decisions made, and any open questions. Do not invent details that were "
+    "not stated."
+)
+
 
 class ConversationMemoryService:
     """Service for managing conversation memory and context."""
@@ -313,6 +331,272 @@ class ConversationMemoryService:
             )
             return True
         return False
+
+    # --- Conversation Summary Engine (Milestone5, Phase2.1) -----------
+    #
+    # Reuses the existing ``Conversation.summary`` field and the tenant-scoped
+    # ``RepositoryFactory`` (inherited tenant isolation). Generation calls the
+    # existing ``OpenRouterProvider`` (mirrors ``app.services.rag``), falling
+    # back gracefully when no LLM is configured so offline/test paths are
+    # unaffected.
+
+    def should_summarize(
+        self,
+        conversation_id: UUID,
+        message_threshold: int = _SUMMARY_DEFAULT_MESSAGE_THRESHOLD,
+        token_threshold: int = _SUMMARY_DEFAULT_TOKEN_THRESHOLD,
+    ) -> bool:
+        """Decide whether a conversation has crossed a summarization threshold.
+
+        A conversation is summarized when EITHER its persisted message count OR
+        its estimated history token count exceeds the configured threshold. The
+        message count is read from ``Conversation.message_count`` (kept accurate
+        by the chat/orchestration pipelines); when it is unavailable the history
+        is counted directly as a fallback.
+
+        Args:
+            conversation_id: UUID of the conversation.
+            message_threshold: Summarize once message count exceeds this.
+            token_threshold: Summarize once estimated history tokens exceed this.
+
+        Returns:
+            True if a (re)summarization should be triggered.
+        """
+        conversation_repo = self.repository_factory.conversations()
+        conversation = conversation_repo.get(conversation_id)
+        if conversation is None:
+            return False
+
+        # Prefer the persisted counter (cheap, index-friendly).
+        msg_count = conversation.message_count or 0
+        if msg_count >= message_threshold:
+            return True
+
+        # Fallback: estimate tokens from the actual history.
+        history = self.get_conversation_history(conversation_id, limit=100)
+        if not history:
+            return False
+        return self.estimate_messages_token_count(history) >= token_threshold
+
+    def _build_summary_user_prompt(
+        self, existing_summary: Optional[str], history_text: str
+    ) -> str:
+        """Build the user prompt for the summarizer LLM.
+
+        When an existing summary is present it is passed back so the LLM
+        *extends* the summary (iterative summarization) rather than restarting
+        from scratch.
+        """
+        if existing_summary:
+            return (
+                "Here is the existing summary of the conversation:\n"
+                f"{existing_summary}\n\n"
+                "Here are the more recent messages:\n"
+                f"{history_text}\n\n"
+                "Update the summary to incorporate the new messages. "
+                "Return only the updated summary."
+            )
+        return (
+            "Summarize the following conversation concisely. "
+            "Return only the summary.\n\n"
+            f"{history_text}"
+        )
+
+    async def generate_summary(
+        self,
+        conversation_id: UUID,
+        model: Optional[str] = None,
+        provider: Optional["_LLMProviderBase"] = None,
+    ) -> Optional[str]:
+        """Generate (and persist) a summary of the conversation using the LLM.
+
+        Uses the conversation's existing ``summary`` as the base when present, so
+        the summary is *extended* rather than regenerated from scratch
+        (iterative summarization). The result is persisted via
+        :meth:`update_conversation_summary`.
+
+        Tenant isolation is inherited from the service (``RepositoryFactory``).
+
+        Args:
+            conversation_id: UUID of the conversation to summarize.
+            model: Optional model override (defaults to a cheap, fast model).
+            provider: Optional pre-constructed LLM provider (used by tests and
+                callers that already hold one). When ``None``, a provider is built
+                from configuration; if no API key is configured the call is a safe
+                no-op that returns the existing summary (if any).
+
+        Returns:
+            The generated (or existing) summary string, or ``None`` if the
+            conversation does not exist or nothing could be produced.
+        """
+        # Local imports keep the module-level ``Message`` symbol (used here for
+        # ORM objects) distinct from the provider's ``Message``.
+        from app.ai.providers.base import (
+            BaseLLMProvider as _LLMProviderBase,  # noqa: F401  (type hint only)
+        )
+        from app.ai.providers.base import (
+            GenerationRequest,
+            Message as ProviderMessage,
+            MessageRole,
+        )
+        from app.ai.providers.openrouter import OpenRouterProvider
+        from app.core.config import settings
+
+        conversation_repo = self.repository_factory.conversations()
+        conversation = conversation_repo.get(conversation_id)
+        if conversation is None:
+            logger.warning(
+                "summary_generation_skipped_no_conversation",
+                conversation_id=str(conversation_id),
+                organization_id=str(self.organization_id),
+            )
+            return None
+
+        # Gather the conversation history to summarize (most recent first -> reversed).
+        history = self.get_conversation_history(conversation_id, limit=100)
+        if not history:
+            # Nothing to summarize yet; keep any existing summary untouched.
+            return conversation.summary
+
+        existing_summary = conversation.summary
+        history_text = self.format_messages_for_prompt(history)
+        user_prompt = self._build_summary_user_prompt(existing_summary, history_text)
+
+        # Provider resolution: reuse caller-supplied provider, else build from
+        # config. When unconfigured (offline/test), this is a safe no-op.
+        own_provider = provider is None
+        if own_provider:
+            api_key = settings.OPENROUTER_API_KEY or settings.OPENAI_API_KEY
+            if not api_key:
+                logger.debug(
+                    "summary_generation_skipped_no_llm",
+                    conversation_id=str(conversation_id),
+                )
+                return existing_summary
+            provider = OpenRouterProvider(
+                api_key=api_key,
+                base_url=settings.OPENROUTER_BASE_URL,
+            )
+
+        try:
+            request = GenerationRequest(
+                messages=[
+                    ProviderMessage(role=MessageRole.SYSTEM, content=_SUMMARY_SYSTEM_PROMPT),
+                    ProviderMessage(role=MessageRole.USER, content=user_prompt),
+                ],
+                model=model or _SUMMARY_DEFAULT_MODEL,
+                temperature=0.0,
+                max_tokens=512,
+            )
+            response = await provider.generate(request)
+            summary = (response.content or "").strip()
+            if not summary:
+                return existing_summary
+            self.update_conversation_summary(conversation_id, summary)
+            return summary
+        except Exception as exc:  # resilience: never break the caller on LLM failure
+            logger.warning(
+                "summary_generation_failed",
+                conversation_id=str(conversation_id),
+                error=str(exc),
+            )
+            return existing_summary
+        finally:
+            if own_provider and provider is not None:
+                try:
+                    await provider.close()
+                except Exception:
+                    pass
+
+    async def maybe_generate_summary(
+        self,
+        conversation_id: UUID,
+        message_threshold: int = _SUMMARY_DEFAULT_MESSAGE_THRESHOLD,
+        token_threshold: int = _SUMMARY_DEFAULT_TOKEN_THRESHOLD,
+        model: Optional[str] = None,
+        provider: Optional["_LLMProviderBase"] = None,
+    ) -> Optional[str]:
+        """Generate a summary only after configurable thresholds are crossed.
+
+        Wraps :meth:`should_summarize` + :meth:`generate_summary` so callers can
+        fire-and-forget summarization at the end of a chat/orchestration turn
+        without re-checking thresholds themselves.
+
+        Returns:
+            The generated summary, or ``None`` when thresholds were not met or
+            generation was a no-op.
+        """
+        if not self.should_summarize(
+            conversation_id,
+            message_threshold=message_threshold,
+            token_threshold=token_threshold,
+        ):
+            return None
+        return await self.generate_summary(
+            conversation_id, model=model, provider=provider
+        )
+
+    def build_context(
+        self,
+        conversation_id: UUID,
+        user_query: str,
+        max_context_tokens: int = 2000,
+    ) -> Tuple[str, Optional[str], List[Message]]:
+        """Build an LLM prompt that leads with the conversation summary.
+
+        Order of injection (Milestone5, Phase2.1):
+
+        1. **Summary first** -- if the conversation has a persisted ``summary``
+           it is injected as a compact recap so old turns are *represented, not
+           resent*.
+        2. **Recent history second** -- the most recent messages (token-budgeted)
+           are injected so short-term context is preserved.
+        3. **RAG context** is layered on by the calling pipeline
+           (``app.services.rag``), which composes the retrieved chunks into the
+           final generation prompt.
+
+        Token optimization: when a summary is present, the recent-history window
+        is shrunk (the summary already covers earlier turns) so the budget is
+        spent on the newest messages -- equivalent to *replacing very old messages
+        with the summary* without mutating persisted data. Existing token
+        budgeting is preserved.
+
+        Returns:
+            Tuple of ``(enhanced_prompt, summary_used, history_messages)``.
+        """
+        summary = self.get_conversation_summary(conversation_id)
+
+        # When a summary exists, give recent history a smaller slice of the
+        # budget: the summary already covers older context.
+        window = max_context_tokens
+        if summary:
+            window = max(100, int(max_context_tokens * _SUMMARY_RECENT_WINDOW_RATIO))
+
+        history_messages = self.get_context_window_messages(
+            conversation_id, max_context_tokens=window
+        )
+        history_text = self.format_messages_for_prompt(history_messages)
+
+        parts: List[str] = []
+        if summary:
+            parts.append(f"Conversation summary:\n{summary}")
+        if history_text:
+            parts.append(f"Recent conversation:\n{history_text}")
+        parts.append(f"Current query: {user_query}")
+
+        enhanced_prompt = "\n\n".join(parts)
+
+        logger.debug(
+            "summary_context_built",
+            conversation_id=str(conversation_id),
+            has_summary=bool(summary),
+            summary_tokens=self.estimate_token_count(summary or ""),
+            history_message_count=len(history_messages),
+            history_tokens=self.estimate_messages_token_count(history_messages),
+            query_tokens=self.estimate_token_count(user_query),
+        )
+
+        return enhanced_prompt, summary, history_messages
 
 
 # Convenience function for dependency injection

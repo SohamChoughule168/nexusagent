@@ -225,12 +225,13 @@ async def chat(
     agent_system_prompt = agent.system_prompt if agent else None
     model_provider = agent.model_provider if agent else "openrouter"
 
-    # Conversation Memory (Milestone 5, Phase 1): inject the conversation's
-    # prior history into the LLM prompt, applying token budgeting first so the
-    # combined prompt stays within the model's context window. Retrieval above
-    # intentionally uses the raw query; only the *generation* prompt is enriched.
+    # Conversation Memory (Milestone 5, Phase 1 + 2.1): inject the
+    # conversation's *summary* (if any) first, then the token-budgeted recent
+    # history, into the LLM prompt. Retrieval above intentionally uses the raw
+    # query; only the *generation* prompt is enriched with summary + history,
+    # and the RAG context is layered on by ``app.services.rag`` downstream.
     memory = ConversationMemoryService(db, tenant.organization_id)
-    enhanced_query, _history_messages = memory.inject_conversation_history(
+    enhanced_query, _, _ = memory.build_context(
         conversation_id, payload.message
     )
 
@@ -305,6 +306,20 @@ async def chat(
             if conv is not None:
                 conv.message_count = (conv.message_count or 0) + 2
                 rf.conversations().update(conv)
+
+                # Milestone5, Phase2.1: when the conversation crosses a
+                # summarization threshold, auto-generate (and persist) a compact
+                # summary. Safe no-op offline / below threshold, so normal turns
+                # are unaffected and failures never break the chat response.
+                try:
+                    summ = ConversationMemoryService(s, tenant.organization_id)
+                    await summ.maybe_generate_summary(conversation_id)
+                except Exception as exc:  # never break the turn on summary errors
+                    logger.warning(
+                        "auto_summary_failed",
+                        conversation_id=str(conversation_id),
+                        error=str(exc),
+                    )
 
     return StreamingResponse(event_stream(), media_type="text/plain")
 

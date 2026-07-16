@@ -771,7 +771,7 @@ class MultiAgentRouter:
         unaffected.
         """
         if self._memory is not None and self.conversation_id is not None:
-            enhanced, _ = self._memory.inject_conversation_history(
+            enhanced, _, _ = self._memory.build_context(
                 self.conversation_id, query
             )
             return enhanced
