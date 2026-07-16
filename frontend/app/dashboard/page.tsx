@@ -52,33 +52,44 @@ export default function DashboardPage() {
           </Card>
         </Link>
 
-        {[
-          {
-            title: "Knowledge Base",
-            description: "Manage documents and retrieval sources.",
-            phase: "Phase 2",
-          },
-          {
-            title: "Agent Builder",
-            description: "Compose and configure autonomous agents.",
-            phase: "Phase 2",
-          },
-        ].map((card) => (
-          <Card key={card.title} className="opacity-90">
+        <Link
+          href="/knowledge-bases"
+          className="transition-transform hover:-translate-y-0.5"
+        >
+          <Card className="h-full opacity-100 hover:border-primary/50">
             <CardHeader>
               <div className="flex items-center justify-between">
-                <CardTitle className="text-base">{card.title}</CardTitle>
-                <Badge variant="outline">{card.phase}</Badge>
+                <CardTitle className="text-base">Knowledge Base</CardTitle>
+                <Badge variant="default">Ready</Badge>
               </div>
-              <CardDescription>{card.description}</CardDescription>
+              <CardDescription>
+                Manage documents and retrieval sources.
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground">
-                Coming in a later milestone.
+                Upload, index, and search documents.
               </p>
             </CardContent>
           </Card>
-        ))}
+        </Link>
+
+        <Card className="opacity-90">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">Agent Builder</CardTitle>
+              <Badge variant="outline">Soon</Badge>
+            </div>
+            <CardDescription>
+              Compose and configure autonomous agents.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground">
+              Coming in a later milestone.
+            </p>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

@@ -11,23 +11,18 @@ interface NavItem {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
-  /** Phase 2+ areas are listed but not yet active. */
+  /** Not-yet-built areas are listed but not active. */
   disabled?: boolean;
 }
 
 /**
- * Primary navigation. Chat / Knowledge Base / Agent Builder are placeholder
- * links for later milestones (Phase 2+); only Dashboard is active in Phase 1.
+ * Primary navigation. Knowledge Base / Chat are active; Agent Builder is a
+ * placeholder for a later milestone.
  */
 const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/chat", label: "Chat", icon: MessageSquare },
-  {
-    href: "/knowledge-bases",
-    label: "Knowledge Base",
-    icon: BookOpen,
-    disabled: true,
-  },
+  { href: "/knowledge-bases", label: "Knowledge Base", icon: BookOpen },
   { href: "/agents", label: "Agent Builder", icon: Boxes, disabled: true },
 ];
 
@@ -100,7 +95,7 @@ export function Sidebar({ className }: SidebarProps) {
       </nav>
 
       <div className="border-t p-4 text-xs text-muted-foreground">
-        {env.appName} · Milestone 6 Phase 2
+        {env.appName} · Milestone 6 Phase 3
       </div>
     </aside>
   );
