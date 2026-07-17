@@ -16,14 +16,13 @@ interface NavItem {
 }
 
 /**
- * Primary navigation. Knowledge Base / Chat are active; Agent Builder is a
- * placeholder for a later milestone.
+ * Primary navigation. Knowledge Base / Chat / Agent Builder are active.
  */
 const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/chat", label: "Chat", icon: MessageSquare },
   { href: "/knowledge-bases", label: "Knowledge Base", icon: BookOpen },
-  { href: "/agents", label: "Agent Builder", icon: Boxes, disabled: true },
+  { href: "/agents", label: "Agent Builder", icon: Boxes },
 ];
 
 export interface SidebarProps {
@@ -95,7 +94,7 @@ export function Sidebar({ className }: SidebarProps) {
       </nav>
 
       <div className="border-t p-4 text-xs text-muted-foreground">
-        {env.appName} · Milestone 6 Phase 3
+        {env.appName} · Milestone 6 Phase 4
       </div>
     </aside>
   );

@@ -99,6 +99,12 @@ export interface Agent {
   model_provider: string | null;
   model_name: string | null;
   temperature: number | null;
+  max_tokens: number | null;
+  top_p: number | null;
+  function_calling: boolean | null;
+  multi_agent_routing: boolean | null;
+  streaming: boolean | null;
+  memory_enabled: boolean | null;
   status: string;
   config: Record<string, unknown> | null;
   knowledge_base_ids: string[] | null;

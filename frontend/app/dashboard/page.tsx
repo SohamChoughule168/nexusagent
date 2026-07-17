@@ -74,22 +74,27 @@ export default function DashboardPage() {
           </Card>
         </Link>
 
-        <Card className="opacity-90">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Agent Builder</CardTitle>
-              <Badge variant="outline">Soon</Badge>
-            </div>
-            <CardDescription>
-              Compose and configure autonomous agents.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="text-xs text-muted-foreground">
-              Coming in a later milestone.
-            </p>
-          </CardContent>
-        </Card>
+        <Link
+          href="/agents"
+          className="transition-transform hover:-translate-y-0.5"
+        >
+          <Card className="h-full opacity-100 hover:border-primary/50">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Agent Builder</CardTitle>
+                <Badge variant="default">Ready</Badge>
+              </div>
+              <CardDescription>
+                Compose and configure autonomous agents.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Build, tune, and manage your agents.
+              </p>
+            </CardContent>
+          </Card>
+        </Link>
       </div>
     </div>
   );
