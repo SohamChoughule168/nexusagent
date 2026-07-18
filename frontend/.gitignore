@@ -7,6 +7,7 @@ out/
 
 # Test / coverage
 coverage/
+test-results/
 
 # TypeScript
 *.tsbuildinfo
