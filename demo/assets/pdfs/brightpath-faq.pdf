@@ -1,0 +1,55 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Count 1 /Kids [5 0 R] >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+4 0 obj
+<< /Length 2394 >>
+stream
+BT /F2 17 Tf 1 0 0 1 56.0 706.0 Tm (Brightpath - FAQ) Tj ET
+BT /F2 13 Tf 1 0 0 1 56.0 680.0 Tm (What are the member roles and permissions?) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 661.0 Tm (Brightpath uses four roles. Owners manage billing, members, and workspace settings. Admins) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 646.0 Tm (manage members and boards but not billing. Members create and edit tasks and docs. Viewers) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 631.0 Tm (can read boards and docs but cannot make changes. Assign a role when you invite someone,) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 616.0 Tm (or change it later from Settings -> Members.) Tj ET
+BT /F2 13 Tf 1 0 0 1 56.0 592.0 Tm (Can we use single sign-on \(SSO\)?) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 573.0 Tm (SSO with SAML and SCIM user provisioning is available on Enterprise plans. Once enabled,) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 558.0 Tm (members join through your identity provider instead of email invites, and access is) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 543.0 Tm (revoked automatically when they leave.) Tj ET
+BT /F2 13 Tf 1 0 0 1 56.0 519.0 Tm (Where is our data stored?) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 500.0 Tm (Each workspace's data is isolated from every other workspace. Backups are taken daily and) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 485.0 Tm (retained per your plan. Enterprise customers can request region pinning and a data-) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 470.0 Tm (processing addendum.) Tj ET
+BT /F2 13 Tf 1 0 0 1 56.0 446.0 Tm (Can we export our data?) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 427.0 Tm (Yes. From Settings -> Data you can export boards, docs, and members to standard formats at) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 412.0 Tm (any time, on every plan. There is no lock-in.) Tj ET
+BT /F2 13 Tf 1 0 0 1 56.0 388.0 Tm (What are the usage limits?) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 369.0 Tm (Free workspaces support up to 3 members and 2 boards. Paid plans remove those caps. File) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 354.0 Tm (attachments are limited to 25 MB per file on Team and 100 MB on Business and Enterprise.) Tj ET
+BT /F2 13 Tf 1 0 0 1 56.0 330.0 Tm (How do we get support?) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 311.0 Tm (Free and Team plans include community and email support. Business adds priority email) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 296.0 Tm (support, and Enterprise includes a dedicated success manager with a response-time SLA.) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 2 0 R /F2 3 0 R >> >> /Contents 4 0 R >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000196 00000 n 
+0000002642 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+2778
+%%EOF
