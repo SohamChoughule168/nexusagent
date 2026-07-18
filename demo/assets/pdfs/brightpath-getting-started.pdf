@@ -1,0 +1,58 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Count 1 /Kids [5 0 R] >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+4 0 obj
+<< /Length 2641 >>
+stream
+BT /F2 17 Tf 1 0 0 1 56.0 706.0 Tm (Brightpath - Getting Started) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 679.0 Tm (This guide takes you from an empty account to a working workspace with your team) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 664.0 Tm (collaborating. Follow the steps in order.) Tj ET
+BT /F2 13 Tf 1 0 0 1 56.0 640.0 Tm (1. Create your workspace) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 621.0 Tm (From the Brightpath home screen, choose Create workspace. Give it a name your team will) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 606.0 Tm (recognize - most use their company or product name. You become the workspace owner) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 591.0 Tm (automatically.) Tj ET
+BT /F2 13 Tf 1 0 0 1 56.0 567.0 Tm (2. Invite your team) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 548.0 Tm (Open the workspace and go to Settings -> Members. Click Invite people, then enter the) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 533.0 Tm (email addresses you want to add. Pick a role for each invite - Admin, Member, or Viewer -) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 518.0 Tm (and send the invites. Invited people get an email with a link; once they accept, they) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 503.0 Tm (appear in the member list.) Tj ET
+BT /F1 11 Tf 1 0 0 1 64.0 482.0 Tm (-  Viewers can read boards and docs but cannot edit them.) Tj ET
+BT /F1 11 Tf 1 0 0 1 64.0 463.0 Tm (-  If your plan includes SSO, members can also join via your identity provider.) Tj ET
+BT /F1 11 Tf 1 0 0 1 64.0 444.0 Tm (-  Owners can set a default role so everyone from your domain starts correctly.) Tj ET
+BT /F2 13 Tf 1 0 0 1 56.0 412.0 Tm (3. Set up your first board) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 393.0 Tm (Choose New board, pick a Kanban or list layout, and add a few columns that match how your) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 378.0 Tm (team works \(for example, To do, In progress, Done\). Create tasks, assign owners, and set) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 363.0 Tm (due dates.) Tj ET
+BT /F2 13 Tf 1 0 0 1 56.0 339.0 Tm (4. Connect integrations) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 320.0 Tm (Under Settings -> Integrations you can connect Slack for notifications, Google Drive for) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 305.0 Tm (file attachments, and your calendar for due-date reminders. Each integration asks for) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 290.0 Tm (permission only to the scopes it needs.) Tj ET
+BT /F2 13 Tf 1 0 0 1 56.0 266.0 Tm (5. Go mobile) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 247.0 Tm (Install the Brightpath mobile app and sign in with the same account. Your boards, docs,) Tj ET
+BT /F1 11 Tf 1 0 0 1 56.0 232.0 Tm (and notifications sync automatically so you can update work from anywhere.) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 2 0 R /F2 3 0 R >> >> /Contents 4 0 R >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000196 00000 n 
+0000002889 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+3025
+%%EOF

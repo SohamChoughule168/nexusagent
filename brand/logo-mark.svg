@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" role="img" aria-label="NexusAgent">
+  <defs>
+    <linearGradient id="nxGrad" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7C5CFF"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+  </defs>
+  <path d="M16 6.5 L7.5 23.5 L24.5 23.5 Z" stroke="url(#nxGrad)" stroke-width="2.2" stroke-linejoin="round" opacity="0.55"/>
+  <circle cx="16" cy="6.5" r="3.4" fill="url(#nxGrad)"/>
+  <circle cx="7.5" cy="23.5" r="3.4" fill="url(#nxGrad)"/>
+  <circle cx="24.5" cy="23.5" r="3.4" fill="url(#nxGrad)"/>
+</svg>
