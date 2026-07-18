@@ -1,0 +1,160 @@
+# NexusAgent AI - Production-like local deployment (single host)
+#
+# Services: frontend (Next.js) · backend (FastAPI) · postgres · redis
+# Does NOT include: Kubernetes, AWS, CI/CD, Nginx, monitoring, HTTPS, LB.
+#
+# Build & run:
+#   docker compose up -d --build
+# Validate config:
+#   docker compose config
+#
+# Secrets come from a local .env file (gitignored). Copy .env.example to .env
+# and fill in real values. Variables below fall back to safe LOCAL defaults so
+# `docker compose up` works out of the box for a localhost demo.
+
+name: nexusagent
+
+services:
+  # ---------------------------------------------------------------- PostgreSQL
+  db:
+    image: postgres:16-alpine
+    container_name: nexusagent-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nexusagent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexusagent}
+      POSTGRES_DB: ${POSTGRES_DB:-nexusagent}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - nexusagent-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nexusagent} -d ${POSTGRES_DB:-nexusagent}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---------------------------------------------------------------------- Redis
+  redis:
+    image: redis:7-alpine
+    container_name: nexusagent-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - nexusagent-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # -------------------------------------------------------------------- Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: nexusagent-backend:latest
+    container_name: nexusagent-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Runtime binds to this port (Dockerfile CMD uses ${PORT}).
+      PORT: "8000"
+      # Database: override localhost with the compose service name. The
+      # application's DATABASE_URL default points at localhost; here we point it
+      # at the postgres container. Use the SYNC driver (psycopg2) at runtime.
+      DATABASE_URL: "postgresql+psycopg2://${POSTGRES_USER:-nexusagent}:${POSTGRES_PASSWORD:-nexusagent}@db:5432/${POSTGRES_DB:-nexusagent}"
+      REDIS_URL: "redis://redis:6379/0"
+      CELERY_BROKER_URL: "redis://redis:6379/1"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/2"
+      # App
+      APP_NAME: "${APP_NAME:-NexusAgent AI}"
+      APP_VERSION: "${APP_VERSION:-0.1.0}"
+      DEBUG: "false"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      LOG_FORMAT: "${LOG_FORMAT:-json}"
+      # JWT secrets (REQUIRED in production - set real values in .env)
+      JWT_SECRET_KEY: "${JWT_SECRET_KEY:-change-me-in-production}"
+      JWT_REFRESH_SECRET_KEY: "${JWT_REFRESH_SECRET_KEY:-change-me-in-production}"
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-30}"
+      JWT_REFRESH_TOKEN_EXPIRE_DAYS: "${JWT_REFRESH_TOKEN_EXPIRE_DAYS:-7}"
+      # LLM providers (leave blank to use the offline/local fallbacks)
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENROUTER_BASE_URL: "${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      EMBEDDINGS_PROVIDER: "${EMBEDDINGS_PROVIDER:-local}"
+      RAG_LLM_PROVIDER: "${RAG_LLM_PROVIDER:-local}"
+      RAG_LLM_MODEL: "${RAG_LLM_MODEL:-openai/gpt-4o-mini}"
+      # CORS: allow the frontend origin(s) the browser loads from.
+      BACKEND_CORS_ORIGINS: "${BACKEND_CORS_ORIGINS:-http://localhost:3000,http://localhost,http://127.0.0.1:3000}"
+      RATE_LIMIT_PER_MINUTE: "${RATE_LIMIT_PER_MINUTE:-100}"
+      MAX_UPLOAD_SIZE_MB: "${MAX_UPLOAD_SIZE_MB:-50}"
+      ENABLE_COST_TRACKING: "${ENABLE_COST_TRACKING:-true}"
+      SECURITY_PASSWORD_SALT: "${SECURITY_PASSWORD_SALT:-change-me-in-production}"
+      SECURITY_FORCE_DEV_MODE: "${SECURITY_FORCE_DEV_MODE:-false}"
+      ENABLE_WEBHOOK_TOOL: "${ENABLE_WEBHOOK_TOOL:-true}"
+      ENABLE_LEAD_CAPTURE_TOOL: "${ENABLE_LEAD_CAPTURE_TOOL:-true}"
+      ENABLE_HUMAN_ESCALATION_TOOL: "${ENABLE_HUMAN_ESCALATION_TOOL:-true}"
+      TOOL_EXECUTION_TIMEOUT_SECONDS: "${TOOL_EXECUTION_TIMEOUT_SECONDS:-15.0}"
+      TOOL_EXECUTION_MAX_OUTPUT_CHARS: "${TOOL_EXECUTION_MAX_OUTPUT_CHARS:-10000}"
+    ports:
+      - "8000:8000"
+    networks:
+      - nexusagent-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ------------------------------------------------------------------- Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Inlined into the client bundle at build time. The browser calls the
+        # backend directly, so this is the origin the user loads the UI from.
+        NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}"
+    image: nexusagent-frontend:latest
+    container_name: nexusagent-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    networks:
+      - nexusagent-net
+    healthcheck:
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "fetch('http://localhost:3000'+'/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  nexusagent-net:
+    driver: bridge

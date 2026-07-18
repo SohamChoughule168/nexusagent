@@ -1,0 +1,31 @@
+# Version control
+.git
+.gitignore
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local env / secrets
+.env
+.env.*
+
+# Runtime artifacts
+storage/
+
+# Tests (not needed in the production image)
+tests/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store

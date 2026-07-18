@@ -1,0 +1,23 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies / build output (reinstalled/rebuilt inside the image)
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Tests are not needed in the production image
+test/
