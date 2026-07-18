@@ -1,12 +1,17 @@
 # NexusAgent AI - Production-like local deployment (single host)
 #
-# Services: frontend (Next.js) · backend (FastAPI) · postgres · redis
-# Does NOT include: Kubernetes, AWS, CI/CD, Nginx, monitoring, HTTPS, LB.
+# Services: nginx (reverse proxy) · frontend (Next.js) · backend (FastAPI)
+#           · postgres · redis
+# Does NOT include: Kubernetes, AWS, CI/CD, monitoring, LB.
 #
 # Build & run:
 #   docker compose up -d --build
 # Validate config:
 #   docker compose config
+#
+# The backend image is built from the REPOSITORY ROOT (its Dockerfile copies
+# the root-level pyproject.toml + backend/). The nginx service proxies the
+# frontend and backend and is the public entrypoint (ports 80 / 443).
 #
 # Secrets come from a local .env file (gitignored). Copy .env.example to .env
 # and fill in real values. Variables below fall back to safe LOCAL defaults so
@@ -59,8 +64,11 @@ services:
   # -------------------------------------------------------------------- Backend
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      # Built from the repository ROOT: the Dockerfile copies the root-level
+      # pyproject.toml + backend/ (see backend/Dockerfile and [tool.setuptools]
+      # package-dir mapping). Using ./backend here would break the build.
+      context: .
+      dockerfile: backend/Dockerfile
     image: nexusagent-backend:latest
     container_name: nexusagent-backend
     restart: unless-stopped
@@ -150,6 +158,37 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  # ---------------------------------------------------------------------- Nginx
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nexusagent-nginx
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      # Enable once TLS certs are mounted (see nginx/tls.conf.example and
+      # docs/deployment/production.md):
+      #   - "443:443"
+    volumes:
+      # Active reverse-proxy config (serves HTTP; prepared for TLS).
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Mount real certs here to enable HTTPS, then reference them in
+      # nginx/tls.conf.example and switch the active config:
+      #   - ./nginx/certs:/etc/nginx/certs:ro
+    networks:
+      - nexusagent-net
+    healthcheck:
+      # Hits the health endpoint routed through nginx -> backend.
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   postgres_data:

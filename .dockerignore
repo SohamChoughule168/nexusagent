@@ -1,0 +1,48 @@
+# Root .dockerignore — applies to builds whose context is the repository root
+# (currently the backend image: `docker build -f backend/Dockerfile .`).
+# Keeps the build context lean and prevents leakage of the frontend tree,
+# version control, secrets, and caches into the Python backend image.
+#
+# NOTE: frontend/ has its own .dockerignore for its own (./frontend) context.
+
+# Version control
+.git
+.gitignore
+
+# Frontend (not needed for the Python backend image)
+frontend/
+node_modules/
+
+# Docs, features, CI, GitHub metadata
+docs/
+features/
+.github/
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Runtime artifacts
+storage/
+
+# Tests (not needed in the production image)
+backend/tests/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store

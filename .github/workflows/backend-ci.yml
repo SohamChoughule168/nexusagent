@@ -111,30 +111,27 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
-      # The project is run with `backend/` on the Python path (see
-      # pyproject.toml [tool.pytest.ini_options] pythonpath), NOT via
-      # `pip install .` — the packaged `packages` list does not match the
-      # actual layout under backend/app. So we install the pinned runtime
-      # dependencies directly (parsed from pyproject) and rely on PYTHONPATH.
+      # The `app` package is installed as a normal top-level import via
+      # `pip install .` (see [tool.setuptools] in pyproject.toml), so no
+      # PYTHONPATH is required for imports or coverage.
       - name: Install dependencies
+        # The `app` package is installed via `pip install .` (see
+        # [tool.setuptools] in pyproject.toml: package-dir maps the root
+        # namespace to backend/, so `app` installs as a top-level importable
+        # package). No PYTHONPATH manipulation is required.
         run: |
           python -m pip install --upgrade pip
-          python - <<'PY'
-          import tomllib, subprocess, sys
-          with open("pyproject.toml", "rb") as fh:
-              data = tomllib.load(fh)
-          subprocess.check_call(
-              [sys.executable, "-m", "pip", "install", *data["project"]["dependencies"]]
-          )
-          PY
+          pip install .
+          pip install alembic==1.13.1
           python -m pip install pytest==8.2.0 pytest-asyncio==0.23.0 pytest-cov==5.0.0
 
       - name: Create database schema
         # Registers all models then creates their tables. init_db() performs
         # Base.metadata.create_all, so the aggregate model module must be
-        # imported first to ensure every table is registered.
+        # imported first to ensure every table is registered. The `app` package
+        # is installed, so no PYTHONPATH is needed.
         run: >-
-          PYTHONPATH=backend python -c
+          python -c
           "import app.models.all_models; from app.core.database import init_db; init_db()"
 
       - name: Run tests with coverage

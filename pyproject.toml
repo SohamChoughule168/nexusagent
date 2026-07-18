@@ -30,8 +30,27 @@ dev = [
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
+# The Python package lives under backend/ (the `app` package and its
+# subpackages). Map the root namespace ("") to backend/ so setuptools discovers
+# `app` there and `pip install .` from the repo root installs a normal,
+# importable top-level `app` package (no PYTHONPATH manipulation required).
 [tool.setuptools]
-packages = ["app", "api", "core", "schemas", "repositories", "models", "ai"]
+package-dir = {"" = "backend"}
+packages = [
+    "app",
+    "app.ai",
+    "app.ai.providers",
+    "app.api",
+    "app.api.v1",
+    "app.api.v1.endpoints",
+    "app.core",
+    "app.models",
+    "app.repositories",
+    "app.schemas",
+    # Namespace package (no __init__.py) — explicitly listed so its modules are
+    # installed; the app imports from it (e.g. `from app.services.rag import ...`).
+    "app.services",
+]
 
 [tool.ruff]
 # Ruff is the project's linter/formatter. The CI workflow runs `ruff check`
@@ -79,6 +98,7 @@ disallow_untyped_defs = false
 
 
 [tool.pytest.ini_options]
-pythonpath = ["backend"]
+# The `app` package is installed via `pip install .` (see [tool.setuptools]),
+# so no PYTHONPATH manipulation is required for imports or coverage.
 testpaths = ["backend/tests"]
 filterwarnings = ["ignore::DeprecationWarning"]

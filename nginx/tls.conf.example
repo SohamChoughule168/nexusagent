@@ -1,0 +1,126 @@
+# NexusAgent AI - TLS / HTTPS configuration (EXAMPLE / PLACEHOLDER)
+#
+# This file is NOT active by default. nginx.conf (HTTP) is mounted as the
+# active config. To enable HTTPS in production:
+#
+#   1. Obtain certificates (e.g. certbot / Let's Encrypt) and place them under
+#      ./nginx/certs/ as fullchain.pem and privkey.pem.
+#   2. Uncomment the cert volume mount in docker-compose.yml:
+#        - ./nginx/certs:/etc/nginx/certs:ro
+#   3. Replace the active config with this one, e.g. mount it over default.conf:
+#        - ./nginx/tls.conf.example:/etc/nginx/conf.d/default.conf:ro
+#      then `docker compose up -d nginx`.
+#
+# Do NOT generate certificates in this phase.
+# See docs/deployment/production.md ("TLS Setup") for the full procedure.
+
+# Upstreams (self-contained so this file can be mounted as the active config).
+upstream backend_upstream {
+    server backend:8000;
+    keepalive 32;
+}
+
+upstream frontend_upstream {
+    server frontend:3000;
+}
+
+# Redirect all plain HTTP traffic to HTTPS.
+server {
+    listen 80;
+    server_name _;
+    # 301 permanent redirect keeps the TLS config as the only real endpoint.
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# HTTPS server.
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name _;
+
+    # Certificate placeholder paths (replace with real mounted certs).
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+
+    # Modern TLS hardening.
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_stapling on;
+    ssl_stapling_verify on;
+
+    # HSTS (only meaningful over HTTPS).
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+
+    # Other secure headers.
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+
+    client_max_body_size 50M;
+
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_vary on;
+    gzip_types
+        text/plain
+        text/css
+        text/xml
+        application/json
+        application/javascript
+        application/xml
+        text/javascript
+        image/svg+xml;
+
+    # Health endpoint (through the TLS listener).
+    location = /health {
+        proxy_pass http://backend_upstream/health;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        access_log off;
+    }
+
+    location /api/ {
+        proxy_pass http://backend_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        client_max_body_size 50M;
+        proxy_request_buffering off;
+    }
+
+    location /_next/static/ {
+        proxy_pass http://frontend_upstream;
+        proxy_set_header Host $host;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        expires 1y;
+    }
+
+    location / {
+        proxy_pass http://frontend_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 60s;
+    }
+}
