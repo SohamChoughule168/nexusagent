@@ -1,0 +1,165 @@
+# Backend CI
+#
+# Validates the Python (FastAPI) backend on every push to `main` and every
+# pull request targeting `main`. Runs linting, type checking, and the test
+# suite with coverage. The test job provisions ephemeral Postgres + Redis
+# service containers so the DB-backed test surface can run without external
+# infrastructure.
+#
+# Fails the build on: any ruff violation, any test failure, or a coverage run
+# error. (Type checking via mypy is currently informational — see the note in
+# pyproject.toml — and does not block the merge.)
+
+name: Backend CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least-privilege token for read-only CI.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_CACHE_DIR: "0"
+
+jobs:
+  # ----------------------------------------------------------------- Lint/Types
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install lint tooling
+        run: python -m pip install --upgrade pip ruff==0.6.9 mypy==1.11.2
+
+      - name: Ruff lint (blocking)
+        # Configured in pyproject.toml [tool.ruff]; fails the build on violations.
+        run: ruff check backend/app backend/tests
+
+      - name: Mypy type check (informational)
+        # The backend is only partially annotated; mypy is run non-blocking so it
+        # surfaces the current error count without red-lining every PR. See the
+        # incremental-adoption note in pyproject.toml [tool.mypy].
+        continue-on-error: true
+        run: mypy backend/app
+
+  # --------------------------------------------------------------------- Tests
+  test:
+    name: Test & Coverage
+    runs-on: ubuntu-latest
+
+    # Ephemeral services the test suite depends on.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nexusagent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Point the (synchronous) SQLAlchemy engine at the Postgres service.
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/nexusagent
+      REDIS_URL: redis://localhost:6379/0
+      JWT_SECRET_KEY: ci-test-secret
+      JWT_REFRESH_SECRET_KEY: ci-test-refresh-secret
+      SECURITY_PASSWORD_SALT: ci-test-salt
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # The project is run with `backend/` on the Python path (see
+      # pyproject.toml [tool.pytest.ini_options] pythonpath), NOT via
+      # `pip install .` — the packaged `packages` list does not match the
+      # actual layout under backend/app. So we install the pinned runtime
+      # dependencies directly (parsed from pyproject) and rely on PYTHONPATH.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python - <<'PY'
+          import tomllib, subprocess, sys
+          with open("pyproject.toml", "rb") as fh:
+              data = tomllib.load(fh)
+          subprocess.check_call(
+              [sys.executable, "-m", "pip", "install", *data["project"]["dependencies"]]
+          )
+          PY
+          python -m pip install pytest==8.2.0 pytest-asyncio==0.23.0 pytest-cov==5.0.0
+
+      - name: Create database schema
+        # Registers all models then creates their tables. init_db() performs
+        # Base.metadata.create_all, so the aggregate model module must be
+        # imported first to ensure every table is registered.
+        run: >-
+          PYTHONPATH=backend python -c
+          "import app.models.all_models; from app.core.database import init_db; init_db()"
+
+      - name: Run tests with coverage
+        run: >-
+          pytest
+          --cov=app
+          --cov-report=xml:coverage.xml
+          --cov-report=html:htmlcov
+          --junitxml=test-results/junit.xml
+          -q
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: |
+            coverage.xml
+            htmlcov/
+          if-no-files-found: warn
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: test-results/junit.xml
+          if-no-files-found: warn

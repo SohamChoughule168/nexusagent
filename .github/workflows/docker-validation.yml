@@ -1,0 +1,50 @@
+# Docker Validation
+#
+# Validates that the project's container images build and that the Compose
+# file is well-formed. Runs on every push to `main` and every pull request
+# targeting `main`.
+#
+# Steps:
+#   1. `docker compose config`  -> validates the compose file (variable
+#      interpolation, service shape) without building.
+#   2. Build the backend image  -> `backend/Dockerfile`, built from the
+#      repository ROOT. The Dockerfile copies root-level `pyproject.toml`,
+#      `backend/`, `alembic/` and `alembic.ini`, so the build context MUST be
+#      the repo root (not ./backend).
+#   3. Build the frontend image -> `frontend/Dockerfile`, built from ./frontend.
+#
+# NOTE: This workflow only *builds* the images; it does not push or deploy
+# them. Deployment is out of scope for this milestone.
+
+name: Docker Validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Compose Config & Image Builds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate docker compose config
+        run: docker compose config
+
+      - name: Build backend image
+        # Context = repo root (see header note). Tags locally for the run only.
+        run: docker build -f backend/Dockerfile -t nexusagent-backend:ci .
+
+      - name: Build frontend image
+        # Context = ./frontend (matches frontend/Dockerfile COPY instructions).
+        run: docker build -f frontend/Dockerfile -t nexusagent-frontend:ci frontend/
