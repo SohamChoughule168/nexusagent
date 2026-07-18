@@ -118,6 +118,16 @@ services:
       ENABLE_HUMAN_ESCALATION_TOOL: "${ENABLE_HUMAN_ESCALATION_TOOL:-true}"
       TOOL_EXECUTION_TIMEOUT_SECONDS: "${TOOL_EXECUTION_TIMEOUT_SECONDS:-15.0}"
       TOOL_EXECUTION_MAX_OUTPUT_CHARS: "${TOOL_EXECUTION_MAX_OUTPUT_CHARS:-10000}"
+    # ---- Container hardening (Milestone 7, Phase 6) ----
+    # Drop all Linux capabilities (the backend binds an unprivileged port and
+    # needs none). Bound CPU/memory/PID to contain a runaway process.
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: "1.0"
+    pids_limit: 256
+    tmpfs:
+      - /tmp
     ports:
       - "8000:8000"
     networks:
@@ -144,6 +154,20 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    # ---- Container hardening (Milestone 7, Phase 6) ----
+    # Read-only root FS + tmpfs /tmp; drop all capabilities. The Next.js
+    # production server is stateless, so this is safe. Telemetry writes are
+    # disabled so the read-only FS is never touched.
+    environment:
+      NEXT_TELEMETRY_DISABLED: "1"
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    mem_limit: 512m
+    cpus: "1.0"
+    pids_limit: 256
     ports:
       - "3000:3000"
     networks:
@@ -180,6 +204,13 @@ services:
       # Mount real certs here to enable HTTPS, then reference them in
       # nginx/tls.conf.example and switch the active config:
       #   - ./nginx/certs:/etc/nginx/certs:ro
+    # ---- Container hardening (Milestone 7, Phase 6) ----
+    # Bound CPU/memory/PID. nginx's master process binds port 80/443 and drops
+    # to the unprivileged `nginx` worker user; its capability set is managed by
+    # the upstream image, so we leave capabilities untouched here and document
+    # the non-root-on-high-port alternative in docs/deployment/security-headers.md.
+    mem_limit: 128m
+    pids_limit: 128
     networks:
       - nexusagent-net
     healthcheck:

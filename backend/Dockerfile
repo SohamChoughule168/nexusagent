@@ -71,4 +71,13 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
 
 # uvicorn is on PATH from the deps stage. The `app` package is installed
 # top-level, so `app.main:app` resolves without any PYTHONPATH manipulation.
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers 1"]
+#
+# `exec` replaces the shell with uvicorn as PID 1 so it receives SIGTERM
+# directly and shuts down gracefully (draining in-flight requests) when the
+# container is stopped. Without `exec`, the shell would be PID 1 and swallow
+# the signal, forcing Docker's SIGKILL after the stop grace period.
+#
+# The container runs as the non-root `appuser` (uid 1001) and, in production
+# compose, with `read_only: true` + a tmpfs `/tmp` (uploads live on a mounted
+# volume). Dropped Linux capabilities: see docker-compose*.yml (`cap_drop`).
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers 1"]

@@ -48,4 +48,8 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
     CMD node -e "fetch('http://localhost:3000'+'/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
 
-CMD ["sh", "-c", "npm run start -- -p ${PORT}"]
+# `exec` makes `node` (the `next start` server) PID 1 so it receives SIGTERM
+# and shuts down cleanly when the container is stopped. The container runs as
+# the non-root `nextjs` user (uid 1001); in production compose it runs with a
+# read-only root filesystem + tmpfs `/tmp` (see docker-compose*.yml).
+CMD ["sh", "-c", "exec npm run start -- -p ${PORT}"]

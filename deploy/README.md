@@ -28,6 +28,19 @@ cd /opt/nexusagent
 See [`../docs/deployment/backups.md`](../docs/deployment/backups.md) for the
 retention policy, monthly restore-verification procedure and the full disaster
 recovery checklist.
+
+## Security
+
+Milestone 7, Phase 6 hardening is documented under
+[`../docs/deployment/`](../docs/deployment/):
+
+| Doc | Covers |
+|-----|--------|
+| [`secrets.md`](../docs/deployment/secrets.md) | Secret generation, rotation, storage, backup, recovery, AWS Secrets Manager, local dev. |
+| [`security-checklist.md`](../docs/deployment/security-checklist.md) | Pre/post-deploy, incident-response, key-rotation checklists. |
+| [`security-scanning.md`](../docs/deployment/security-scanning.md) | Bandit, Trivy, pip-audit, npm audit (CI + local). |
+| [`security-headers.md`](../docs/deployment/security-headers.md) | CSP, HSTS, frame/referrer/permissions headers, nginx integration. |
+| [`rate-limiting.md`](../docs/deployment/rate-limiting.md) | In-memory rate limiter behavior and limits. |
 | `iam-policy.json`      | Least-privilege instance-role policy (SSM, optional S3/ECR).|
 
 ## Overridable env vars

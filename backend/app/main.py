@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestIDMiddleware, SecurityHeadersMiddleware
+from app.core.rate_limit import RateLimitMiddleware
 from app.core.observability_middleware import (
     AccessLogMiddleware,
     MetricsMiddleware,
@@ -54,6 +55,25 @@ app.add_middleware(
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(SecurityHeadersMiddleware)
+
+# Rate limiting runs just inside the CORS layer so unauthenticated clients are
+# throttled before they reach any business logic. Health/metrics are exempt.
+# It is registered only when enabled (RATE_LIMIT_PER_MINUTE > 0) and skipped
+# under pytest so the test suite — which shares one client IP — is never
+# throttled. In production compose it is active at the configured budget and
+# keys off X-Forwarded-For / X-Real-IP set by nginx.
+def _under_pytest() -> bool:
+    import os
+
+    return bool(os.environ.get("PYTEST_VERSION") or os.environ.get("PYTEST_CURRENT_TEST"))
+
+
+if settings.RATE_LIMIT_PER_MINUTE > 0 and not _under_pytest():
+    app.add_middleware(
+        RateLimitMiddleware,
+        limit_per_minute=settings.RATE_LIMIT_PER_MINUTE,
+        exempt_paths=("/health", "/metrics", "/health/live", "/health/ready", "/health/startup"),
+    )
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(AccessLogMiddleware)
 app.add_middleware(RequestContextMiddleware)

@@ -20,6 +20,8 @@ permissions:
   contents: read
   # Dependency Review posts a summary comment on the PR.
   pull-requests: write
+  # Trivy uploads SARIF to the GitHub Security tab.
+  security-events: write
 
 jobs:
   # --------------------------------------------------------- Python (pip-audit)
@@ -99,3 +101,92 @@ jobs:
           # Fail the PR if it introduces a vulnerability of this severity or
           # higher in the dependency graph.
           fail-on-severity: high
+
+  # ----------------------------------------------------------- Python SAST (Bandit)
+  bandit:
+    name: Python SAST (Bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Bandit
+        run: python -m pip install --upgrade pip && python -m pip install bandit==1.7.9
+
+      - name: Run Bandit over the backend application
+        # Scan the application package (not tests/venv). Fail only on HIGH
+        # severity findings; tighten to MEDIUM once the baseline is clean.
+        run: bandit -r backend/app -x backend/app/tests -l high -ll
+
+  # ----------------------------------------------------------- Container scan (Trivy)
+  trivy:
+    name: Container & Filesystem Scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Trivy CLI
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin v0.55.2
+
+      - name: Trivy filesystem scan (secrets, misconfig, dependency CVEs)
+        # Scans our own source + IaC/config (Dockerfiles, compose, nginx) for
+        # misconfigurations and leaked secrets. Node/Python dependencies are
+        # excluded here because they are covered by `npm audit` / `pip-audit`;
+        # this scan focuses on the unique Trivy value (secret + config scanning).
+        run: |
+          trivy fs \
+            --scanners vuln,secret,config \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            --format sarif \
+            --output trivy-fs.sarif \
+            --exclude '**/node_modules/**' \
+            --exclude '**/.git/**' \
+            --exclude '**/.venv/**' \
+            --exclude '**/__pycache__/**' \
+            --exclude '**/.next/**' \
+            .
+
+      - name: Upload filesystem SARIF
+        if: always()
+        # Code scanning upload needs GitHub Advanced Security; don't fail the
+        # pipeline if it isn't enabled on the repo.
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      - name: Build backend image (for image scan)
+        run: docker build -f backend/Dockerfile -t nexusagent-backend:ci .
+
+      - name: Build frontend image (for image scan)
+        run: docker build -f frontend/Dockerfile -t nexusagent-frontend:ci ./frontend
+
+      - name: Trivy image scan (backend)
+        # Only fail on CRITICAL, unfixed issues so ephemeral base-image noise
+        # does not red the pipeline; fixable CRITICALs still fail and prompt an
+        # image bump.
+        run: |
+          trivy image \
+            --severity CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            nexusagent-backend:ci
+
+      - name: Trivy image scan (frontend)
+        run: |
+          trivy image \
+            --severity CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            nexusagent-frontend:ci
+
