@@ -121,7 +121,9 @@ jobs:
       - name: Run Bandit over the backend application
         # Scan the application package (not tests/venv). Fail only on HIGH
         # severity findings; tighten to MEDIUM once the baseline is clean.
-        run: bandit -r backend/app -x backend/app/tests -l high -ll
+        # `-lll` = report only HIGH severity (bandit's `-l` is a count flag:
+        # -l LOW, -ll MEDIUM, -lll HIGH).
+        run: bandit -r backend/app -x backend/app/tests -lll
 
   # ----------------------------------------------------------- Container scan (Trivy)
   trivy:
@@ -134,7 +136,7 @@ jobs:
       - name: Install Trivy CLI
         run: |
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin v0.55.2
+            | sh -s -- -b /usr/local/bin v0.72.0
 
       - name: Trivy filesystem scan (secrets, misconfig, dependency CVEs)
         # Scans our own source + IaC/config (Dockerfiles, compose, nginx) for
@@ -148,11 +150,11 @@ jobs:
             --exit-code 1 \
             --format sarif \
             --output trivy-fs.sarif \
-            --exclude '**/node_modules/**' \
-            --exclude '**/.git/**' \
-            --exclude '**/.venv/**' \
-            --exclude '**/__pycache__/**' \
-            --exclude '**/.next/**' \
+            --skip-dirs '**/node_modules/**' \
+            --skip-dirs '**/.git/**' \
+            --skip-dirs '**/.venv/**' \
+            --skip-dirs '**/__pycache__/**' \
+            --skip-dirs '**/.next/**' \
             .
 
       - name: Upload filesystem SARIF

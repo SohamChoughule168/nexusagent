@@ -60,7 +60,7 @@ class LocalDeterministicEmbedder:
     def _embed_one(self, text: str) -> List[float]:
         vec = [0.0] * self.dimensions
         for tok in _tokenize(text):
-            h = hashlib.md5(tok.encode("utf-8")).digest()
+            h = hashlib.md5(tok.encode("utf-8"), usedforsecurity=False).digest()
             # Two independent hash halves pick a position and a sign.
             pos = int.from_bytes(h[:4], "big") % self.dimensions
             sign = 1.0 if h[4] & 1 else -1.0
