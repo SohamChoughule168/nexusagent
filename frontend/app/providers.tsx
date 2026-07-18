@@ -5,6 +5,8 @@ import { QueryProvider } from "@/providers/query-provider";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { AuthProvider } from "@/providers/auth-provider";
 import { Toaster } from "@/components/ui/toaster";
+import { OfflineBanner } from "@/components/ui/offline-banner";
+import { RouteTracker } from "@/components/analytics/route-tracker";
 
 /**
  * App-wide client providers, composed once at the root layout.
@@ -17,6 +19,8 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
         <AuthProvider>
           {children}
           <Toaster />
+          <OfflineBanner />
+          <RouteTracker />
         </AuthProvider>
       </QueryProvider>
     </ThemeProvider>

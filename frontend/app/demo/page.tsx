@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
-import { ArrowRight, MessageCircleQuestion, Sparkles } from "lucide-react";
+import { ArrowRight, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { SiteHeader } from "@/components/marketing/site-header";
 import { SiteFooter } from "@/components/marketing/site-footer";
 import { DemoChat } from "@/components/marketing/demo-chat";
+import { SuggestedPrompts } from "@/components/marketing/suggested-prompts";
+import { DemoGuidance } from "@/components/marketing/demo-guidance";
 
 export const metadata: Metadata = {
   title: "Live demo",
@@ -12,18 +14,11 @@ export const metadata: Metadata = {
     "Talk to Aria, a support agent grounded in a sample help center — a live NexusAgent demo.",
 };
 
-const TRY_THESE = [
-  "How do I invite my team to a workspace?",
-  "What does Brightpath cost?",
-  "Do you support single sign-on (SSO)?",
-  "Can I export my workspace data?",
-];
-
 export default function DemoPage() {
   return (
     <div className="flex min-h-screen flex-col">
       <SiteHeader />
-      <main className="flex-1">
+      <main id="main-content" className="flex-1">
         <section className="border-b border-border bg-muted/30">
           <div className="container py-12">
             <div className="mx-auto max-w-2xl text-center">
@@ -43,25 +38,13 @@ export default function DemoPage() {
         </section>
 
         <section className="container grid gap-8 py-12 lg:grid-cols-[1fr_320px]">
-          <DemoChat />
+          <div className="space-y-6">
+            <DemoGuidance />
+            <DemoChat />
+          </div>
 
           <aside className="space-y-6">
-            <div className="rounded-xl border border-border bg-card p-5">
-              <h2 className="flex items-center gap-2 text-sm font-semibold">
-                <MessageCircleQuestion className="h-4 w-4 text-brand-600" />
-                Try asking
-              </h2>
-              <ul className="mt-3 space-y-2">
-                {TRY_THESE.map((q) => (
-                  <li key={q}>
-                    <span className="text-sm text-muted-foreground">{q}</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-4 text-xs text-muted-foreground">
-                Tip: after launching, open a new chat and ask your own question.
-              </p>
-            </div>
+            <SuggestedPrompts />
 
             <div className="rounded-xl border border-brand-200 bg-brand-50/60 p-5">
               <h2 className="text-sm font-semibold text-brand-800">

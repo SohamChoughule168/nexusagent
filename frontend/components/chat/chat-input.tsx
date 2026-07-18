@@ -4,6 +4,7 @@ import * as React from "react";
 import { ArrowUp, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { useDemoPromptStore } from "@/store/demo-prompt.store";
 
 export interface ChatInputProps {
   onSend: (text: string) => void;
@@ -41,6 +42,17 @@ export function ChatInput({
   React.useEffect(() => {
     resize();
   }, [value, resize]);
+
+  // Adopt a suggested prompt pushed from the demo page (no-op in the real app,
+  // where the demo-prompt store stays null).
+  const pendingPrompt = useDemoPromptStore((s) => s.pendingPrompt);
+  const setPendingPrompt = useDemoPromptStore((s) => s.setPendingPrompt);
+  React.useEffect(() => {
+    if (!pendingPrompt) return;
+    setValue(pendingPrompt);
+    setPendingPrompt(null);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [pendingPrompt, setPendingPrompt]);
 
   const submit = React.useCallback(() => {
     const text = value.trim();

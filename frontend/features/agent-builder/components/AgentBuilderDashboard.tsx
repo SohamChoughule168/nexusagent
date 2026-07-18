@@ -15,6 +15,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Tooltip } from "@/components/ui/tooltip";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
@@ -126,10 +127,12 @@ export function AgentBuilderDashboard() {
             Compose and configure autonomous agents.
           </p>
         </div>
-        <Button onClick={openCreate}>
-          <Plus className="h-4 w-4" />
-          New agent
-        </Button>
+        <Tooltip content="Create a new autonomous agent">
+          <Button onClick={openCreate}>
+            <Plus className="h-4 w-4" />
+            New agent
+          </Button>
+        </Tooltip>
       </div>
 
       <div className="relative max-w-sm">

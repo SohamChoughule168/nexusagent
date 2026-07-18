@@ -1,14 +1,25 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, Play, TriangleAlert, Sparkles } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Loader2, Play, RotateCcw, TriangleAlert, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChatPage } from "@/features/chat/components/chat-page";
 import { useAuthStore } from "@/store/auth.store";
+import { useChatStore } from "@/store/chat.store";
 import { tokenStorage } from "@/lib/token-storage";
 import { env } from "@/lib/env";
+import { track } from "@/lib/analytics";
 
 type Phase = "idle" | "launching" | "ready" | "error";
+
+/** Starter prompts surfaced as chips in the empty demo chat. */
+const DEMO_STARTERS = [
+  "How do I invite my team to a workspace?",
+  "What does Brightpath cost?",
+  "Do you support single sign-on (SSO)?",
+  "Can I export my workspace data?",
+];
 
 /**
  * Public live-demo playground. Transparently authenticates as the seeded
@@ -20,6 +31,9 @@ export function DemoChat() {
   const [phase, setPhase] = React.useState<Phase>("idle");
   const [error, setError] = React.useState<string>("");
   const login = useAuthStore((s) => s.login);
+  const logout = useAuthStore((s) => s.logout);
+  const selectConversation = useChatStore((s) => s.selectConversation);
+  const queryClient = useQueryClient();
 
   // Already in the demo workspace? Go straight to the chat.
   React.useEffect(() => {
@@ -35,6 +49,7 @@ export function DemoChat() {
         email: env.demoUserEmail,
         password: env.demoUserPassword,
       });
+      track("demo_launched");
       setPhase("ready");
     } catch {
       setError(
@@ -44,16 +59,37 @@ export function DemoChat() {
     }
   }, [login]);
 
+  // Reset the demo: clear local chat/query state and the demo session, then
+  // return to the launch screen for a fresh start.
+  const resetDemo = React.useCallback(() => {
+    selectConversation(null);
+    queryClient.clear();
+    logout();
+    setError("");
+    setPhase("idle");
+  }, [selectConversation, queryClient, logout]);
+
   if (phase === "ready") {
     return (
       <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-        <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">
-          <Sparkles className="h-4 w-4 text-brand-600" />
-          Live with Aria · Brightpath Support — grounded in the Brightpath Help
-          Center
+        <div className="flex items-center justify-between gap-2 border-b border-border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">
+          <span className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-brand-600" />
+            Live with Aria · Brightpath Support — grounded in the Brightpath Help
+            Center
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={resetDemo}
+            className="text-muted-foreground"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset demo
+          </Button>
         </div>
         <div className="h-[600px]">
-          <ChatPage />
+          <ChatPage starters={DEMO_STARTERS} />
         </div>
       </div>
     );

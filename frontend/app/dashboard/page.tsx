@@ -10,6 +10,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
+import { OnboardingBanner } from "@/components/onboarding/onboarding-banner";
 
 /**
  * Dashboard landing / navigation hub. Confirms the authenticated shell,
@@ -24,6 +25,8 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      <OnboardingBanner />
+
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">
           {firstName ? `Welcome, ${firstName}` : "Welcome back"}

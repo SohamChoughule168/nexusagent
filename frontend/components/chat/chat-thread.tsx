@@ -7,6 +7,7 @@ import { useChatStore } from "@/store/chat.store";
 import { ChatHeader } from "@/components/chat/chat-header";
 import { MessageList } from "@/components/chat/message-list";
 import { ChatInput } from "@/components/chat/chat-input";
+import { ConversationStarters } from "@/components/chat/conversation-starters";
 import { conversationTitle } from "@/types/conversation";
 import type { Agent, Conversation, Message } from "@/types/conversation";
 
@@ -15,6 +16,8 @@ export interface ChatThreadProps {
   agent?: Agent | undefined;
   /** Mobile-only back control. */
   onBack?: () => void;
+  /** Optional starter prompts shown when the conversation is empty (demo). */
+  starters?: string[];
 }
 
 function makeMessageId(): string {
@@ -34,7 +37,12 @@ function makeMessageId(): string {
  * useChatStream, then invalidates the messages query to pick up the
  * persisted (citations / tokens) messages.
  */
-export function ChatThread({ conversation, agent, onBack }: ChatThreadProps) {
+export function ChatThread({
+  conversation,
+  agent,
+  onBack,
+  starters,
+}: ChatThreadProps) {
   const {
     messages,
     isLoading,
@@ -92,6 +100,9 @@ export function ChatThread({ conversation, agent, onBack }: ChatThreadProps) {
         onRetry={handleRetry}
         className="min-h-0"
       />
+      {starters && (messages?.length ?? 0) === 0 && (
+        <ConversationStarters starters={starters} />
+      )}
       <ChatInput
         onSend={handleSend}
         onStop={stop}

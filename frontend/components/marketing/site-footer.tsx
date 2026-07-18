@@ -24,6 +24,8 @@ const FOOTER_COLUMNS = [
     links: [
       { href: "/#use-cases", label: "Use cases" },
       { href: "/pricing", label: "Plans" },
+      { href: "/book-demo", label: "Book a demo" },
+      { href: "/contact", label: "Contact" },
     ],
   },
 ];

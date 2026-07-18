@@ -28,7 +28,12 @@ function makeSessionId(): string {
  * (conversations / agents) comes from React Query; the open conversation
  * and streaming state live in the Zustand chat store.
  */
-export function ChatPage() {
+export interface ChatPageProps {
+  /** Optional starter prompts (demo only). */
+  starters?: string[];
+}
+
+export function ChatPage({ starters }: ChatPageProps) {
   const {
     conversations,
     createConversationAsync,
@@ -149,6 +154,7 @@ export function ChatPage() {
             conversation={selected}
             agent={agentById.get(selected.agent_id)}
             onBack={() => setMobileView("list")}
+            starters={starters}
           />
         ) : (
           <div className="flex h-full w-full flex-col items-center justify-center gap-3 p-8 text-center">

@@ -11,6 +11,7 @@ import { DeleteKnowledgeBaseDialog } from "@/features/knowledge-base/components/
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Tooltip } from "@/components/ui/tooltip";
 import { LoadingState } from "@/components/ui/loading-state";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import type {
@@ -103,10 +104,12 @@ export function KnowledgeBaseDashboard() {
             Manage documents and retrieval sources for your agents.
           </p>
         </div>
-        <Button onClick={openCreate}>
-          <Plus className="h-4 w-4" />
-          New knowledge base
-        </Button>
+        <Tooltip content="Create a new knowledge base">
+          <Button onClick={openCreate}>
+            <Plus className="h-4 w-4" />
+            New knowledge base
+          </Button>
+        </Tooltip>
       </div>
 
       <div className="relative max-w-sm">

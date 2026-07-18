@@ -64,7 +64,7 @@ const PLANS: Plan[] = [
     period: "talk to us",
     blurb: "For organizations with security and scale needs.",
     cta: "Book a demo",
-    href: "/demo",
+    href: "/book-demo",
     highlights: [
       "Unlimited agents & knowledge bases",
       "SSO / SAML & advanced RBAC",
@@ -129,7 +129,7 @@ export default function PricingPage() {
   return (
     <div className="flex min-h-screen flex-col">
       <SiteHeader />
-      <main className="flex-1">
+      <main id="main-content" className="flex-1">
         {/* Header */}
         <section className="relative overflow-hidden border-b border-border">
           <div className="absolute inset-0 -z-10 bg-grid opacity-40" />
