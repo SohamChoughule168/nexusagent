@@ -1,0 +1,166 @@
+# NexusAgent AI - AWS single-instance production deployment
+#
+# This is the AWS variant of docker-compose.yml (Milestone 7, Phase 4).
+# It is intentionally single-instance / single-host (no Kubernetes, no ECS
+# tasks, no Terraform, no auto scaling). One EC2 host runs the application
+# containers; stateful services are managed AWS offerings:
+#
+#   * PostgreSQL  -> Amazon RDS        (no `db` container)
+#   * Redis       -> Amazon ElastiCache (no `redis` container)
+#                     (or run redis as a container on the same host - see docs)
+#   * Uploads     -> EBS volume mounted at /data (see `volumes` below)
+#   * Secrets     -> local .env.production (gitignored); AWS Secrets Manager
+#                    is documented as an optional upgrade.
+#
+# nginx is the ONLY service that publishes host ports (80 / 443). The backend
+# and frontend are reachable only on the internal bridge network, so the EC2
+# security group only needs to open 22 (or SSM), 80 and 443.
+#
+# Build & run (from the repo root on the EC2 host):
+#   docker compose -f docker-compose.aws.yml --env-file .env.production up -d --build
+# Validate config:
+#   docker compose -f docker-compose.aws.yml --env-file .env.production config
+#
+# The backend image is built from the REPOSITORY ROOT (its Dockerfile copies
+# pyproject.toml + backend/). The frontend image is built from ./frontend.
+
+name: nexusagent-aws
+
+services:
+  # -------------------------------------------------------------------- Backend
+  backend:
+    # Built on the host (single-instance MVP). With ECR, replace with the
+    # pushed image reference instead, e.g. 123456789012.dkr.ecr.us-east-1.
+    # amazonaws.com/nexusagent-backend:latest and drop `build:`.
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: nexusagent-backend:latest
+    container_name: nexusagent-backend
+    restart: unless-stopped
+    # NOTE: no host `ports:` - nginx is the only public entrypoint and reaches
+    # the backend over nexusagent-net.
+    environment:
+      PORT: "8000"
+      # PostgreSQL on Amazon RDS (synchronous psycopg2 driver at runtime).
+      DATABASE_URL: "postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${RDS_ENDPOINT}:${RDS_PORT:-5432}/${POSTGRES_DB}"
+      # Redis on Amazon ElastiCache (or the in-host redis container).
+      REDIS_URL: "redis://${ELASTICACHE_ENDPOINT}:${REDIS_PORT:-6379}/0"
+      CELERY_BROKER_URL: "redis://${ELASTICACHE_ENDPOINT}:${REDIS_PORT:-6379}/1"
+      CELERY_RESULT_BACKEND: "redis://${ELASTICACHE_ENDPOINT}:${REDIS_PORT:-6379}/2"
+      # App
+      APP_NAME: "${APP_NAME:-NexusAgent AI}"
+      APP_VERSION: "${APP_VERSION:-0.1.0}"
+      DEBUG: "false"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      LOG_FORMAT: "${LOG_FORMAT:-json}"
+      # JWT secrets - REQUIRED in production (no default; compose fails if empty).
+      JWT_SECRET_KEY: "${JWT_SECRET_KEY}"
+      JWT_REFRESH_SECRET_KEY: "${JWT_REFRESH_SECRET_KEY}"
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-30}"
+      JWT_REFRESH_TOKEN_EXPIRE_DAYS: "${JWT_REFRESH_TOKEN_EXPIRE_DAYS:-7}"
+      # LLM providers (blank -> offline/local fallbacks)
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENROUTER_BASE_URL: "${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      EMBEDDINGS_PROVIDER: "${EMBEDDINGS_PROVIDER:-local}"
+      RAG_LLM_PROVIDER: "${RAG_LLM_PROVIDER:-local}"
+      RAG_LLM_MODEL: "${RAG_LLM_MODEL:-openai/gpt-4o-mini}"
+      # CORS: the production origin the browser loads the UI from.
+      BACKEND_CORS_ORIGINS: "${BACKEND_CORS_ORIGINS}"
+      RATE_LIMIT_PER_MINUTE: "${RATE_LIMIT_PER_MINUTE:-100}"
+      MAX_UPLOAD_SIZE_MB: "${MAX_UPLOAD_SIZE_MB:-50}"
+      ENABLE_COST_TRACKING: "${ENABLE_COST_TRACKING:-true}"
+      SECURITY_PASSWORD_SALT: "${SECURITY_PASSWORD_SALT}"
+      SECURITY_FORCE_DEV_MODE: "${SECURITY_FORCE_DEV_MODE:-false}"
+      ENABLE_WEBHOOK_TOOL: "${ENABLE_WEBHOOK_TOOL:-true}"
+      ENABLE_LEAD_CAPTURE_TOOL: "${ENABLE_LEAD_CAPTURE_TOOL:-true}"
+      ENABLE_HUMAN_ESCALATION_TOOL: "${ENABLE_HUMAN_ESCALATION_TOOL:-true}"
+      TOOL_EXECUTION_TIMEOUT_SECONDS: "${TOOL_EXECUTION_TIMEOUT_SECONDS:-15.0}"
+      TOOL_EXECUTION_MAX_OUTPUT_CHARS: "${TOOL_EXECUTION_MAX_OUTPUT_CHARS:-10000}"
+      # Uploads persist to the EBS volume mounted at /data (see volumes below).
+      UPLOAD_STORAGE_DIR: "/data/nexusagent/uploads"
+    volumes:
+      # Bind mount onto the EBS data volume so uploads survive container/instance
+      # recreation. init-deploy.sh creates this path (owned by uid/gid 1001).
+      - /data/nexusagent/uploads:/data/nexusagent/uploads
+    networks:
+      - nexusagent-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ------------------------------------------------------------------- Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # The browser calls the BACKEND through nginx on the same origin, so
+        # this must be the public origin the UI is served from (https).
+        NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL}"
+    image: nexusagent-frontend:latest
+    container_name: nexusagent-frontend
+    restart: unless-stopped
+    networks:
+      - nexusagent-net
+    healthcheck:
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "fetch('http://localhost:3000'+'/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------- Nginx
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nexusagent-nginx
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      # Enable once TLS certs are mounted (see docs/deployment/aws.md > TLS):
+      #   - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # For TLS, mount the certs and switch to nginx/tls.conf.example:
+      #   - ./nginx/certs:/etc/nginx/certs:ro
+    networks:
+      - nexusagent-net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+networks:
+  nexusagent-net:
+    driver: bridge
