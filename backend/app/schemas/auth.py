@@ -33,9 +33,21 @@ class PasswordChange(BaseModel):
 
 
 class APIKeyCreate(BaseModel):
-    organization_id: str
     name: str
     scopes: List[str] = Field(default_factory=list)
+
+
+class APIKeyInfo(BaseModel):
+    """Non-secret representation of a stored API key (never exposes the key)."""
+
+    id: str
+    name: str
+    key_prefix: str
+    scopes: List[str] = Field(default_factory=list)
+    rate_limit: Optional[int] = None
+    is_active: bool = True
+    created_at: Optional[Any] = None
+    last_used_at: Optional[Any] = None
 
 
 class APIKeyResponse(BaseModel):

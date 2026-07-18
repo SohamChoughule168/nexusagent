@@ -373,7 +373,10 @@ class UsageEvent(MultiTenantModel):
 class APIKey(MultiTenantModel):
     """Hashed API key for programmatic access (key_hash never returned)."""
     __tablename__ = "api_keys"
-    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
+    # Python-side default so a PK is always populated on INSERT (the explicit
+    # redefinition here would otherwise shadow the generator on the shared
+    # TimestampedModel base). Mirrors Agent/KnowledgeBase/Conversation.
+    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     organization_id = Column(
         UUID(as_uuid=True),
         ForeignKey("organizations.id"),

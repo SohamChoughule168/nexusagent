@@ -39,7 +39,10 @@ def test_request_id_header_present(client: TestClient):
 def test_security_headers_present(client: TestClient):
     response = client.get("/health")
     assert response.headers.get("X-Content-Type-Options") == "nosniff"
-    assert response.headers.get("X-Frame-Options") == "DENY"
+    # Phase 6 security hardening sets SAMEORIGIN (documented in
+    # docs/deployment/security-headers.md) to permit same-origin framing while
+    # still blocking cross-origin clickjacking.
+    assert response.headers.get("X-Frame-Options") == "SAMEORIGIN"
 
 
 def test_api_v1_router_mounted(client: TestClient):

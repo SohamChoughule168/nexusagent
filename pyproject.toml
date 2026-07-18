@@ -1,7 +1,7 @@
 [project]
 name = "nexusagent"
-description = "Multi-tenant AI Agent SaaS platform (backend foundation)"
-version = "0.1.0"
+description = "Multi-tenant AI Agent SaaS platform"
+version = "1.0.0"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

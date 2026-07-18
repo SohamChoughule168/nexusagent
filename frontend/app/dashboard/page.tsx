@@ -12,8 +12,11 @@ import Link from "next/link";
 import { useAuth } from "@/hooks/use-auth";
 
 /**
- * Dashboard landing placeholder. The full Dashboard UI is a later milestone;
- * this screen confirms the authenticated shell works and orients the user.
+ * Dashboard landing / navigation hub. Confirms the authenticated shell,
+ * orients the user, and links into the primary workspaces (Chat, Knowledge
+ * Base, Agent Builder). Operational metrics (request rate, latency, errors)
+ * are served by the Prometheus/Grafana monitoring stack; a product-level
+ * in-app analytics view is a post-1.0 enhancement.
  */
 export default function DashboardPage() {
   const { user } = useAuth();

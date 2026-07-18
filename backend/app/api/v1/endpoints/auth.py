@@ -21,10 +21,11 @@ from app.core.security import (
 )
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.auth_dependencies import get_tenant_context, TenantContext
 from app.repositories.tenant_repository import RepositoryFactory
 from app.models.user import User
 from app.models.organization import Organization
-from app.models.all_models import OrganizationMember
+from app.models.all_models import OrganizationMember, APIKey
 from app.schemas.auth import (
     TokenResponse,
     UserRegister,
@@ -32,6 +33,7 @@ from app.schemas.auth import (
     RefreshTokenRequest,
     PasswordChange,
     APIKeyCreate,
+    APIKeyInfo,
     APIKeyResponse,
 )
 
@@ -269,20 +271,31 @@ def change_password(request: PasswordChange, db: Session = Depends(get_db)):
 @router.post("/api-keys", response_model=APIKeyResponse, status_code=status.HTTP_201_CREATED)
 def create_api_key(
     request: APIKeyCreate,
+    tenant: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
-    # TODO: Add auth dependency
 ):
-    """Create a new API key for the organization."""
-    # TODO: Get organization_id from authenticated user
-    organization_id = request.organization_id
+    """Create a new API key for the authenticated organization.
 
-    # Generate key
+    The plaintext key is returned exactly once (in the response). Only its hash
+    is persisted; the ``key_hash`` is never returned on subsequent reads.
+    """
     plain_key = generate_api_key()
     key_hash = hash_api_key(plain_key)
     key_prefix = get_key_prefix(plain_key)
 
-    # TODO: Save to database
-    # For now, return the key (in production, only return it once!)
+    api_key = APIKey(
+        organization_id=tenant.organization_id,
+        name=request.name,
+        key_hash=key_hash,
+        key_prefix=key_prefix,
+        scopes={scope: True for scope in request.scopes},
+    )
+    db.add(api_key)
+    db.commit()
+    db.refresh(api_key)
+
+    logger.info("api_key_created", organization_id=str(tenant.organization_id), name=request.name)
+
     return APIKeyResponse(
         key=plain_key,
         key_prefix=key_prefix,
@@ -291,15 +304,33 @@ def create_api_key(
     )
 
 
-@router.get("/api-keys")
-def list_api_keys(db: Session = Depends(get_db)):
-    """List API keys for the organization."""
-    # TODO: Implement with auth dependency
-    return {"keys": []}
+@router.get("/api-keys", response_model=dict)
+def list_api_keys(
+    tenant: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """List API keys for the authenticated organization.
 
-
-# Dependencies for auth
-# The production auth dependency lives in app.core.auth_dependencies
-# (get_current_user / get_tenant_context / require_roles) and is wired into
-# the protected endpoints (conversations, agents, etc.).
-from app.core.auth_dependencies import get_current_user, get_tenant_context, require_roles  # noqa: E402,F401
+    Returns non-secret metadata only — the hashed key is never exposed.
+    """
+    keys = (
+        db.query(APIKey)
+        .filter(APIKey.organization_id == tenant.organization_id)
+        .order_by(APIKey.created_at.desc())
+        .all()
+    )
+    return {
+        "keys": [
+            APIKeyInfo(
+                id=str(k.id),
+                name=k.name,
+                key_prefix=k.key_prefix,
+                scopes=list(k.scopes.keys()) if isinstance(k.scopes, dict) else [],
+                rate_limit=k.rate_limit,
+                is_active=k.is_active,
+                created_at=k.created_at,
+                last_used_at=k.last_used_at,
+            )
+            for k in keys
+        ]
+    }
