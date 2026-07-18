@@ -60,9 +60,9 @@ AWS offerings. The instance security group only needs to open **22** (or SSM),
 | Database         | Amazon RDS for PostgreSQL 16        | Managed, Multi-AZ optional.             |
 | Cache / broker   | Amazon ElastiCache (Redis 7)        | Or a redis container on the host.       |
 | Document storage | EBS volume mounted at `/data`       | `UPLOAD_STORAGE_DIR=/data/nexusagent/uploads`. |
-| Secrets          | `.env.production` on host           | AWS Secrets Manager is a documented upgrade. |
+| Secrets          | `.env.production` on host           | AWS Secrets Manager is supported: `deploy/fetch-secrets.sh` renders the env from a JSON secret (see [aws-secrets.md](aws-secrets.md) Option B). |
 | IAM              | EC2 instance role                   | Optional; SSM + CloudWatch/Loptional S3/ECR. See [aws-iam.md](aws-iam.md). |
-| DNS / TLS        | Route 53 + ACM (or certbot)         | Terminate TLS at nginx.                 |
+| DNS / TLS        | Route 53 + Let's Encrypt (certbot)  | Terminate TLS at nginx (see [tls.md](tls.md)). |
 
 ---
 
@@ -125,17 +125,23 @@ against RDS, and waits for the backend health endpoint. Open
 `http://<ec2-public-dns>/` to verify.
 
 ### 3.4 DNS + TLS (production)
-1. Point your domain's A record at the instance (Elastic IP) via Route 53.
-2. Obtain a cert (ACM + import into the host, or `certbot` on the host) and
-   place it at `nginx/certs/fullchain.pem` + `nginx/certs/privkey.pem`.
-3. In `docker-compose.aws.yml`, uncomment the `443` port and the certs volume,
-   and mount `nginx/tls.conf.example` as the active config (see
-   [production.md §5](production.md)). Recreate nginx:
+1. Point your domain's A/AAAA record at the instance Elastic IP via Route 53.
+2. Issue a Let's Encrypt certificate with certbot and switch nginx to HTTPS:
    ```bash
-   docker compose -f docker-compose.aws.yml --env-file .env.production up -d nginx
+   ./deploy/init-letsencrypt.sh      # obtains cert, renders nginx/tls.conf, flips NGINX_CONF
+   ./deploy/setup-cron.sh            # nightly backup + twice-daily certbot renewal
    ```
-4. Set `NEXT_PUBLIC_API_BASE_URL` and `BACKEND_CORS_ORIGINS` to your `https://`
-   origin and rebuild the frontend (`deploy/update-containers.sh`).
+   This serves HTTP→HTTPS redirect, HSTS, modern TLS ciphers, and OCSP stapling.
+   Full procedure, renewal, and troubleshooting are in
+   [`tls.md`](tls.md). (ACM + an Application Load Balancer is a documented
+   alternative in `tls.md` §6, out of scope here.)
+3. Set `NEXT_PUBLIC_API_BASE_URL` and `BACKEND_CORS_ORIGINS` to your `https://`
+   origin and rebuild the frontend (`deploy/update-containers.sh`) — both are
+   already templated from the `DOMAIN` value in `.env.production`.
+
+> **First bring-up without a domain:** you can run the stack on HTTP only
+> (`NGINX_CONF=./nginx/nginx.conf`, the default) and enable TLS later once DNS
+> and the security group allow 80/443.
 
 ---
 
@@ -218,11 +224,15 @@ Container healthchecks: backend `curl /health`; frontend fetches `/`; nginx
 `wget /health`. All use `restart: unless-stopped`.
 
 ### Startup sequence
-1. EC2 boots; `user-data.sh` mounts EBS at `/data`, installs Docker.
-2. `init-deploy.sh` builds images, then `docker compose up -d`.
-3. `db-migrate.sh` runs `alembic upgrade head` against RDS.
-4. `healthcheck.sh` polls backend `/health` until healthy.
-5. nginx depends on backend+frontend `service_healthy`, then proxies traffic.
+1. EC2 boots; `user-data.sh` mounts EBS at `/data`, installs Docker + certbot,
+   and enables the `nexusagent` systemd unit.
+2. On boot, `systemd` runs `docker compose up -d` via the `nexusagent` unit,
+   bringing the stack back after a host reboot (containers also use
+   `restart: unless-stopped` for in-place crashes).
+3. `init-deploy.sh` builds images, then `docker compose up -d`.
+4. `db-migrate.sh` runs `alembic upgrade head` against RDS.
+5. `healthcheck.sh` polls backend `/health` until healthy.
+6. nginx depends on backend+frontend `service_healthy`, then proxies traffic.
 
 ### Failure recovery
 - **Container crash:** `restart: unless-stopped` brings it back; healthchecks

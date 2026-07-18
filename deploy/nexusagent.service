@@ -1,0 +1,30 @@
+# NexusAgent AI - systemd unit to bring up the deployment on host boot.
+#
+# Installed by deploy/user-data.sh to /etc/systemd/system/nexusagent.service
+# and enabled, so a host reboot automatically restarts the stack (containers
+# themselves use `restart: unless-stopped` for in-place crashes).
+#
+# Container-level config is read from /opt/nexusagent/.env.production via
+# --env-file, which also drives NGINX_CONF (HTTP vs HTTPS). To run with the TLS
+# override (port 443 + certs mount), edit ExecStart/ExecStop below to append:
+#   -f /opt/nexusagent/docker-compose.aws.tls.yml
+# after the base file (and ensure NGINX_CONF=./nginx/tls.conf in .env.production,
+# which init-letsencrypt.sh sets for you).
+
+[Unit]
+Description=NexusAgent AI (docker compose)
+Documentation=https://github.com/your-org/nexusagent
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/nexusagent
+ExecStart=/usr/bin/docker compose -f /opt/nexusagent/docker-compose.aws.yml --env-file /opt/nexusagent/.env.production up -d
+ExecStop=/usr/bin/docker compose -f /opt/nexusagent/docker-compose.aws.yml --env-file /opt/nexusagent/.env.production down
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

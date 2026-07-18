@@ -1,0 +1,29 @@
+# NexusAgent AI - TLS override for docker-compose.aws.yml
+#
+# Applied ON TOP OF the base compose once a certificate exists:
+#
+#   ENABLE_TLS=true docker compose \
+#     -f docker-compose.aws.yml -f docker-compose.aws.tls.yml \
+#     --env-file .env.production up -d
+#
+# (deploy scripts do this automatically when ENABLE_TLS=true, and
+#  init-letsencrypt.sh rewrites NGINX_CONF in .env.production so subsequent
+#  `update-containers.sh` calls keep serving TLS.)
+#
+# It only adds the public 443 listener and mounts the host Let's Encrypt
+# certificate directory into nginx. The active config file itself is selected
+# by NGINX_CONF (set to ./nginx/tls.conf by init-letsencrypt.sh) in the base
+# compose. The ACME webroot volume is already declared on the nginx service in
+# the base file, so it needs no entry here.
+
+name: nexusagent-aws
+
+services:
+  nginx:
+    # Open HTTPS to the world (80 is already open in the base file).
+    ports:
+      - "443:443"
+    # Read-only mount of the host Let's Encrypt live directory. The rendered
+    # nginx/tls.conf expects certs at /etc/nginx/certs/live/<DOMAIN>/*.
+    volumes:
+      - /etc/letsencrypt:/etc/nginx/certs:ro

@@ -171,9 +171,13 @@ services:
       # Enable once TLS certs are mounted (see docs/deployment/aws.md > TLS):
       #   - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      # For TLS, mount the certs and switch to nginx/tls.conf.example:
-      #   - ./nginx/certs:/etc/nginx/certs:ro
+      # Active config is selected by NGINX_CONF (default HTTP). init-letsencrypt.sh
+      # flips it to ./nginx/tls.conf after issuing a certificate; the TLS override
+      # file then opens 443 and mounts the certs.
+      - ${NGINX_CONF:-./nginx/nginx.conf}:/etc/nginx/conf.d/default.conf:ro
+      # ACME HTTP-01 webroot: certbot writes challenge files here and nginx serves
+      # them over HTTP so the certificate can be issued/renewed.
+      - /var/www/letsencrypt:/var/www/letsencrypt:ro
     # ---- Container hardening (Milestone 7, Phase 6) ----
     # Bound CPU/memory/PID. nginx's master binds 80/443 and drops to the
     # unprivileged `nginx` worker user; capability set is managed by the image.

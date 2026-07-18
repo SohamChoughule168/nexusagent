@@ -30,7 +30,8 @@ echo "[bootstrap] starting at $(date -u)"
 apt-get update -y
 apt-get install -y --no-install-recommends \
   ca-certificates curl git gnupg lsb-release \
-  postgresql-client cron awscli
+  postgresql-client cron awscli \
+  certbot gettext-base
 
 # ---- Docker Engine + Compose plugin ----
 install -m 0755 -d /etc/apt/keyrings
@@ -69,12 +70,24 @@ grep -q "$DATA_MNT " /etc/fstab || \
 install -d -o 1001 -g 1001 "$DATA_MNT/nexusagent/uploads"
 install -d -o 1001 -g 1001 "$DATA_MNT/nexusagent/backups"
 
+# ---- ACME webroot for Let's Encrypt / certbot ----
+# nginx serves /.well-known/acme-challenge/ from here over HTTP so a TLS
+# certificate can be issued and auto-renewed (see docs/deployment/tls.md).
+install -d -m 0755 /var/www/letsencrypt
+
 # ---- Clone application ----
 APP_DIR="/opt/nexusagent"
 if [ ! -d "$APP_DIR/.git" ]; then
   git clone "$REPO_URL" "$APP_DIR"
 fi
 chown -R deploy:deploy "$APP_DIR"
+
+# ---- systemd unit: auto-start the stack on host boot ----
+# Containers use `restart: unless-stopped` for crashes; this unit restarts the
+# whole compose stack when the EC2 instance itself reboots.
+install -m 0644 "$APP_DIR/deploy/nexusagent.service" /etc/systemd/system/nexusagent.service
+systemctl daemon-reload
+systemctl enable nexusagent
 
 systemctl enable --now docker
 

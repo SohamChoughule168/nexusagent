@@ -20,6 +20,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.aws.yml}"
+source "$(dirname "$0")/compose.sh"
 ENV_FILE="${ENV_FILE:-.env.production}"
 BRANCH="${1:-main}"
 
@@ -27,13 +28,13 @@ echo "==> Pulling latest source (branch=$BRANCH)"
 git pull --ff-only "origin" "$BRANCH"
 
 echo "==> Rebuilding images"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build
+docker compose "${COMPOSE_FILES[@]}" --env-file "$ENV_FILE" build
 
 echo "==> Applying migrations"
 "$REPO_ROOT/deploy/db-migrate.sh"
 
 echo "==> Recreating containers"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --force-recreate
+docker compose "${COMPOSE_FILES[@]}" --env-file "$ENV_FILE" up -d --force-recreate
 
 echo "==> Waiting for backend health"
 "$REPO_ROOT/deploy/healthcheck.sh" 15 5

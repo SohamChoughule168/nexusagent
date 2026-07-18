@@ -19,16 +19,17 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.aws.yml}"
+source "$(dirname "$0")/compose.sh"
 ENV_FILE="${ENV_FILE:-.env.production}"
 SVC="${1:-backend}"
 
 echo "==> Health-gated restart of '$SVC'"
 
 echo "    stopping '$SVC'"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" stop "$SVC"
+docker compose "${COMPOSE_FILES[@]}" --env-file "$ENV_FILE" stop "$SVC"
 
 echo "    recreating '$SVC' (latest image/config)"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
+docker compose "${COMPOSE_FILES[@]}" --env-file "$ENV_FILE" \
   up -d --no-deps --force-recreate "$SVC"
 
 echo "    waiting for '$SVC' health"

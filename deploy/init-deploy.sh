@@ -18,6 +18,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.aws.yml}"
+source "$(dirname "$0")/compose.sh"
 ENV_FILE="${ENV_FILE:-.env.production}"
 
 if [ ! -f "$ENV_FILE" ]; then
@@ -31,10 +32,10 @@ echo "==> Ensuring uploads directory on EBS volume (/data/nexusagent/uploads)"
 sudo install -d -o 1001 -g 1001 /data/nexusagent/uploads
 
 echo "==> Building images (backend + frontend) from source"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build
+docker compose "${COMPOSE_FILES[@]}" --env-file "$ENV_FILE" build
 
 echo "==> Starting services"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d
+docker compose "${COMPOSE_FILES[@]}" --env-file "$ENV_FILE" up -d
 
 echo "==> Applying database migrations"
 "$REPO_ROOT/deploy/db-migrate.sh"

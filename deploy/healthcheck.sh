@@ -11,13 +11,14 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.aws.yml}"
+source "$(dirname "$0")/compose.sh"
 ENV_FILE="${ENV_FILE:-.env.production}"
 ATTEMPTS="${1:-10}"
 SLEEP="${2:-5}"
 
 echo "==> Probing backend /health (max $ATTEMPTS attempts, ${SLEEP}s apart)"
 for i in $(seq 1 "$ATTEMPTS"); do
-  if docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
+  if docker compose "${COMPOSE_FILES[@]}" --env-file "$ENV_FILE" \
       exec -T backend curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
     echo "==> backend healthy"
     exit 0

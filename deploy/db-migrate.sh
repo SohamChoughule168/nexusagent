@@ -15,8 +15,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.aws.yml}"
+source "$(dirname "$0")/compose.sh"
 ENV_FILE="${ENV_FILE:-.env.production}"
 
 echo "==> Running: alembic upgrade head"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" exec -T backend alembic upgrade head
+docker compose "${COMPOSE_FILES[@]}" --env-file "$ENV_FILE" exec -T backend alembic upgrade head
 echo "==> Migrations applied."
