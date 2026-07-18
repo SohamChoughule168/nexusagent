@@ -1,0 +1,83 @@
+# =============================================================================
+# NexusAgent AI - Prometheus configuration (Milestone 7, Phase 5: Observability)
+# =============================================================================
+#
+# Scrapes the NexusAgent FastAPI backend's /metrics endpoint plus the standard
+# PostgreSQL, Redis and host exporters, and loads the alerting rules.
+#
+# Topology notes
+# --------------
+# * This file is used directly by `monitoring/docker-compose.monitoring.yml`.
+# * The backend, PostgreSQL and Redis run in the *application* compose stack
+#   (docker-compose.yml) and publish their ports on the host. The monitoring
+#   stack reaches them via `host.docker.internal` (mapped to the host gateway).
+# * The exporters themselves run *inside* the monitoring stack, so they are
+#   addressed by their service names (postgres-exporter, redis-exporter,
+#   node-exporter) on the monitoring network.
+#
+# If you run Prometheus outside Docker (systemd / bare metal), replace
+# `host.docker.internal` with the real hostname/IP of each target.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    cluster: nexusagent
+    env: ${DEPLOY_ENV:-production}
+
+# Alerting: forward firing alerts to Alertmanager.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+# Load alerting rules (high error rate, dependency down, resource exhaustion…).
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # ----------------------------------------------------------------- NexusAgent
+  # Application metrics exposed by the backend at GET /metrics.
+  - job_name: nexusagent-backend
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+        labels:
+          service: backend
+          tier: app
+
+  # ------------------------------------------------------------------- Node
+  # Host metrics (CPU, memory, disk, network, uptime) from node_exporter.
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          service: host
+          tier: infra
+
+  # ----------------------------------------------------------------- PostgreSQL
+  # postgres_exporter connects to the RDS / Postgres instance and exposes
+  # pg_* metrics (connections, replication, bloat, stat activity…).
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+        labels:
+          service: postgres
+          tier: data
+
+  # --------------------------------------------------------------------- Redis
+  # redis_exporter connects to ElastiCache / Redis and exposes redis_* metrics.
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+        labels:
+          service: redis
+          tier: data
+
+  # ----------------------------------------------------------------- Prometheus
+  # Self-monitoring.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

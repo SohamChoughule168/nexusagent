@@ -1,0 +1,54 @@
+# =============================================================================
+# NexusAgent AI - Alertmanager configuration (Milestone 7, Phase 5)
+# =============================================================================
+#
+# Minimal, production-safe Alertmanager config. Alerts are grouped and routed to
+# a single receiver placeholder. Replace the `email` / `webhook` receivers with
+# your real notification targets (PagerDuty, Slack, Opsgenie, etc.) before
+# relying on it for on-call.
+
+global:
+  resolve_timeout: 5m
+  # Slack/email SMTP settings come from the environment in the compose file.
+
+route:
+  receiver: default
+  group_by: ["alertname", "service", "tier"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Critical, page-worthy alerts go to their own fast-repeat route.
+    - matchers:
+        - severity = "critical"
+      receiver: critical
+      repeat_interval: 1h
+    # Everything else falls through to the default receiver.
+
+receivers:
+  # ---- Default (non-paging) receiver ---------------------------------------
+  # Plug in Slack / email here. Placeholder uses a webhook URL from the env.
+  - name: default
+    webhook_configs:
+      - url: ${ALERT_WEBHOOK_URL:-http://localhost:9093/#noop}
+        send_resolved: true
+
+  # ---- Critical (paging) receiver ------------------------------------------
+  - name: critical
+    webhook_configs:
+      - url: ${ALERT_WEBHOOK_URL_CRITICAL:-http://localhost:9093/#noop}
+        send_resolved: true
+    email_configs:
+      - to: ${ALERT_EMAIL_TO:-oncall@example.com}
+        from: ${ALERT_EMAIL_FROM:-alertmanager@example.com}
+        smarthost: ${ALERT_SMTP_SMARTHOST:-localhost:587}
+        require_tls: false
+        send_resolved: true
+
+inhibit_rules:
+  # Suppress lower-severity alerts when a dependency-down critical is firing.
+  - source_matchers:
+      - severity = "critical"
+    target_matchers:
+      - severity = "warning"
+    equal: ["service", "tier"]

@@ -1,0 +1,18 @@
+# NexusAgent AI - Grafana datasource provisioning (Milestone 7, Phase 5)
+#
+# Provisions a single Prometheus datasource (uid: prometheus). Dashboards in
+# monitoring/grafana/dashboards reference this uid, so they bind automatically
+# on first import.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      httpMethod: POST
+      timeInterval: 15s

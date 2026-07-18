@@ -1,0 +1,16 @@
+# NexusAgent AI - Grafana dashboard provisioning (Milestone 7, Phase 5)
+#
+# Auto-loads every *.json dashboard in monitoring/grafana/dashboards.
+apiVersion: 1
+
+providers:
+  - name: nexusagent
+    orgId: 1
+    folder: NexusAgent
+    type: file
+    disableDeletion: false
+    editable: true
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

@@ -24,6 +24,10 @@ cd /opt/nexusagent
 | `healthcheck.sh`       | Poll backend `/health` over the internal network.           |
 | `backup.sh`            | `pg_dump` of RDS + tar of uploads; prune old backups.       |
 | `restore.sh`           | Restore a backup set (DB + uploads). Destructive.           |
+
+See [`../docs/deployment/backups.md`](../docs/deployment/backups.md) for the
+retention policy, monthly restore-verification procedure and the full disaster
+recovery checklist.
 | `iam-policy.json`      | Least-privilege instance-role policy (SSM, optional S3/ECR).|
 
 ## Overridable env vars

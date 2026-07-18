@@ -1,0 +1,141 @@
+# =============================================================================
+# NexusAgent AI - Observability stack (Milestone 7, Phase 5)
+# =============================================================================
+#
+# Self-contained Prometheus + Grafana + Alertmanager + exporters. The NexusAgent
+# application itself runs in the *other* compose file (docker-compose.yml) and
+# publishes its ports on the host. This stack reaches those targets through
+# `host.docker.internal` (mapped to the Docker host gateway via extra_hosts).
+#
+# Bring it up:
+#   docker compose -f monitoring/docker-compose.monitoring.yml up -d
+#   # Grafana:  http://localhost:3001  (admin / admin — change in .env!)
+#   # Prometheus: http://localhost:9090
+#   # Alertmanager: http://localhost:9093
+#
+# The backend metrics endpoint, PostgreSQL and Redis must already be reachable
+# on the host (ports 8000 / 5432 / 6379).
+#
+# Connection strings for the exporters are read from the environment file
+# (.env / .env.production) so credentials are never hard-coded here:
+#   POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, RDS_ENDPOINT / RDS_PORT
+#   REDIS_URL (or REDIS_HOST=host.docker.internal, REDIS_PORT=6379)
+
+name: nexusagent-monitoring
+
+services:
+  # ------------------------------------------------------------------ Prometheus
+  prometheus:
+    image: prom/prometheus:v2.53.1
+    container_name: nexusagent-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - monitoring-net
+
+  # ---------------------------------------------------------------- Alertmanager
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: nexusagent-alertmanager
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    networks:
+      - monitoring-net
+
+  # ---------------------------------------------------------------------- Grafana
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: nexusagent-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: ""
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - monitoring-net
+
+  # ----------------------------------------------------------- PostgreSQL exporter
+  postgres-exporter:
+    image: prometheuscommunity/postgres_exporter:v0.15.0
+    container_name: nexusagent-postgres-exporter
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATA_SOURCE_NAME: >-
+        postgresql://${POSTGRES_USER:-nexusagent}:${POSTGRES_PASSWORD:-nexusagent}@host.docker.internal:${RDS_PORT:-5432}/${POSTGRES_DB:-nexusagent}?sslmode=disable
+    ports:
+      - "9187:9187"
+    networks:
+      - monitoring-net
+
+  # --------------------------------------------------------------- Redis exporter
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.58.0
+    container_name: nexusagent-redis-exporter
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      REDIS_ADDR: redis://host.docker.internal:6379
+    ports:
+      - "9121:9121"
+    networks:
+      - monitoring-net
+
+  # ----------------------------------------------------------------- Node exporter
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    container_name: nexusagent-node-exporter
+    restart: unless-stopped
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/host/root"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+    ports:
+      - "9100:9100"
+    networks:
+      - monitoring-net
+
+volumes:
+  prometheus_data:
+  alertmanager_data:
+  grafana_data:
+
+networks:
+  monitoring-net:
+    driver: bridge

@@ -51,6 +51,26 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"
 
+    # ---- Observability (Milestone 7, Phase 5) ----
+    # Namespace prefixed to every Prometheus metric (e.g. nexusagent_http_*).
+    PROMETHEUS_NAMESPACE: str = "nexusagent"
+    # Master switch for the /metrics endpoint + HTTP metrics middleware.
+    METRICS_ENABLED: bool = True
+    # Optional rotating file sinks. When unset, logs go to stdout/stderr
+    # (the container-friendly default). When set, the corresponding logger
+    # also writes to a size-capped, rotated file (see app/core/logging.py).
+    LOG_FILE: Optional[str] = None
+    ACCESS_LOG_FILE: Optional[str] = None
+    # RotatingFileHandler tuning (bytes per file, retained copies).
+    LOG_MAX_BYTES: int = 10 * 1024 * 1024  # 10 MiB
+    LOG_BACKUP_COUNT: int = 5
+    # Emit structured per-request access logs (method/path/status/latency).
+    LOG_ACCESS_ENABLED: bool = True
+    # Readiness gating. DB + storage are always required; Redis/LLM are
+    # reported but do not force a 503 by default because the app degrades
+    # gracefully without them. Flip these to make them hard dependencies.
+    HEALTH_REQUIRE_REDIS: bool = False
+
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/nexusagent"
 

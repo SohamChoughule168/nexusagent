@@ -1,0 +1,172 @@
+# =============================================================================
+# NexusAgent AI - Prometheus alerting rules (Milestone 7, Phase 5)
+# =============================================================================
+#
+# Eight recommended alerts, grouped by severity:
+#   * critical — dependency down / sustained service failure (page on-call)
+#   * warning  — degradation, latency, resource pressure (ticket / Slack)
+#
+# All expressions use the metrics exposed by:
+#   * the NexusAgent backend (/metrics): nexusagent_*
+#   * node_exporter:                          node_*
+#   * postgres_exporter:                      pg_*
+#   * redis_exporter:                         redis_*
+#
+# Validate with:  promtool check rules monitoring/prometheus/alerts.yml
+
+groups:
+  # ----------------------------------------------------------- Service health
+  - name: nexusagent.service
+    rules:
+      - alert: ServiceDown
+        expr: up{job="nexusagent-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: backend
+          tier: app
+        annotations:
+          summary: "NexusAgent backend is down ({{ $labels.instance }})"
+          description: >
+            Prometheus has not been able to scrape the NexusAgent backend
+            /metrics endpoint for 1 minute. The API is likely unavailable to
+            users. Check the backend container, nginx and the host.
+
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(nexusagent_http_errors_total[5m])) by (instance)
+            /
+            clamp_min(sum(rate(nexusagent_http_requests_total[5m])) by (instance), 1)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: backend
+          tier: app
+        annotations:
+          summary: "Backend error rate > 5% ({{ $labels.instance }})"
+          description: >
+            The 5xx+4xx error ratio has exceeded 5% for 5 minutes
+            (current value: {{ $value | humanizePercentage }}).
+            Inspect /health/ready, recent deploys, and backend logs.
+
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(nexusagent_http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: backend
+          tier: app
+        annotations:
+          summary: "Backend p95 latency > 1s"
+          description: >
+            The 95th-percentile request latency has been above 1s for 10
+            minutes (current: {{ $value | humanizeDuration }}).
+            Check DB pool saturation, Redis latency and slow LLM calls.
+
+  # ----------------------------------------------------------- Dependencies
+  - name: nexusagent.dependencies
+    rules:
+      - alert: DatabaseUnavailable
+        expr: nexusagent_db_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: postgres
+          tier: data
+        annotations:
+          summary: "PostgreSQL is unreachable"
+          description: >
+            The backend cannot reach PostgreSQL (nexusagent_db_up == 0) for
+            1 minute. The API will return 503 from /health/ready. Verify the
+            RDS endpoint, security-group ingress and credentials.
+
+      - alert: RedisUnavailable
+        expr: nexusagent_redis_up == 0
+        for: 2m
+        labels:
+          severity: warning
+          service: redis
+          tier: data
+        annotations:
+          summary: "Redis is unreachable"
+          description: >
+            The backend cannot reach Redis (nexusagent_redis_up == 0) for 2
+            minutes. Cache and queue behaviour will degrade. Verify ElastiCache
+            / Redis connectivity and the broker URL.
+
+      - alert: LLMProviderUnreachable
+        expr: nexusagent_llm_up == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: llm
+          tier: app
+        annotations:
+          summary: "LLM provider unreachable"
+          description: >
+            The non-destructive connectivity probe to the LLM provider has
+            been failing for 10 minutes (nexusagent_llm_up == 0). RAG / chat
+            answers will fall back to local compositors. Check egress, DNS and
+            provider status.
+
+  # ----------------------------------------------------------- Resource usage
+  - name: nexusagent.resources
+    rules:
+      - alert: DiskUsageHigh
+        expr: |
+          (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}
+            /
+            node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}
+          ) < 0.10
+        for: 5m
+        labels:
+          severity: warning
+          service: host
+          tier: infra
+        annotations:
+          summary: "Disk space < 10% free on {{ $labels.instance }} ({{ $labels.mountpoint }})"
+          description: >
+            Free disk space has dropped below 10% for 5 minutes. Backups, the
+            Postgres volume or logs may fill the disk. Rotate logs, prune
+            backups or grow the EBS volume.
+
+      - alert: MemoryUsageHigh
+        expr: |
+          (
+            node_memory_MemAvailable_bytes
+            /
+            node_memory_MemTotal_bytes
+          ) < 0.10
+        for: 5m
+        labels:
+          severity: warning
+          service: host
+          tier: infra
+        annotations:
+          summary: "Memory usage > 90% on {{ $labels.instance }}"
+          description: >
+            Available memory has been below 10% for 5 minutes. The OOM killer
+            may terminate the backend or PostgreSQL. Check for leaks and
+            right-size the instance.
+
+      - alert: CpuUsageHigh
+        expr: |
+          1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) by (instance) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          service: host
+          tier: infra
+        annotations:
+          summary: "CPU usage > 85% on {{ $labels.instance }}"
+          description: >
+            Sustained CPU usage above 85% for 10 minutes. Requests may queue
+            and latency will climb. Inspect hot endpoints and consider a larger
+            instance type.
