@@ -1,7 +1,7 @@
 """Long-Term Memory Store (Milestone 5, Phase 2.2).
 
 Revision ID: 006_long_term_memory
-Revises: 005_reconcile_models_to_migrations
+Revises: 005_reconcile_models
 Create Date: 2026-07-16 00:00:06.000000
 
 Adds the ``memories`` table: a tenant-scoped (``organization_id``) long-term
@@ -28,7 +28,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = '006_long_term_memory'
-down_revision = '005_reconcile_models_to_migrations'
+down_revision = '005_reconcile_models'
 branch_labels = None
 depends_on = None
 
