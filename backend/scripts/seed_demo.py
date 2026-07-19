@@ -209,14 +209,17 @@ def seed(db) -> None:
 
     tenant = TenantContext(organization_id=org.id, user_id=user.id, role="owner")
 
-    # Knowledge base.
+    # Knowledge base. The model takes its fields via the JSON ``data`` dict
+    # (the same shape the REST API uses), so pass them that way.
     kb = KnowledgeBase(
         organization_id=str(org.id),
-        name=DEMO_KB_NAME,
-        description="Public help center for the Brightpath demo workspace.",
-        chunk_size=1000,
-        chunk_overlap=200,
-        chunk_strategy="recursive",
+        data={
+            "name": DEMO_KB_NAME,
+            "description": "Public help center for the Brightpath demo workspace.",
+            "chunk_size": 1000,
+            "chunk_overlap": 200,
+            "chunk_strategy": "recursive",
+        },
     )
     db.add(kb)
     db.flush()
@@ -299,35 +302,39 @@ def seed(db) -> None:
         db.add(conv)
         db.flush()
 
-        db.add(
-            Message(
-                conversation_id=str(conv.id),
-                organization_id=str(org.id),
-                role="user",
-                content=sample["user"],
-                token_count=len(sample["user"].split()),
-            )
+        # Set ``id`` explicitly (as the REST API does). A Python-side
+        # ``default=uuid.uuid4()`` is evaluated once per flush batch, so two
+        # messages committed together would otherwise collide on the PK.
+        user_msg = Message(
+            conversation_id=str(conv.id),
+            organization_id=str(org.id),
+            role="user",
+            content=sample["user"],
+            token_count=len(sample["user"].split()),
         )
-        db.add(
-            Message(
-                conversation_id=str(conv.id),
-                organization_id=str(org.id),
-                role="assistant",
-                content=sample["assistant"],
-                token_count=len(sample["assistant"].split()),
-                citations={"sources": [{"chunk_id": chunk_id, "document_id": str(doc.id) if doc else None, "score": 0.92, "snippet": snippet}]},
-                model_provider="openrouter",
-                model_name="anthropic/claude-3.5-sonnet",
-            )
+        user_msg.id = uuid.uuid4()
+        db.add(user_msg)
+
+        assistant_msg = Message(
+            conversation_id=str(conv.id),
+            organization_id=str(org.id),
+            role="assistant",
+            content=sample["assistant"],
+            token_count=len(sample["assistant"].split()),
+            citations={"sources": [{"chunk_id": chunk_id, "document_id": str(doc.id) if doc else None, "score": 0.92, "snippet": snippet}]},
+            model_provider="openrouter",
+            model_name="anthropic/claude-3.5-sonnet",
         )
+        assistant_msg.id = uuid.uuid4()
+        db.add(assistant_msg)
         db.commit()
         log(f"  created sample conversation: {sample['title']}")
 
-    # Demo API key (printed once).
+    # Demo API key (printed once). The ``APIKey`` model has no ``user_id``
+    # column (matching the REST API and the migration); scope by organization.
     plain_key = generate_api_key()
     api_key = APIKey(
         organization_id=org.id,
-        user_id=user.id,
         name="Demo workspace key",
         key_hash=hash_api_key(plain_key),
         key_prefix=plain_key[:8],

@@ -71,8 +71,10 @@ class Settings(BaseSettings):
     # gracefully without them. Flip these to make them hard dependencies.
     HEALTH_REQUIRE_REDIS: bool = False
 
-    # Database
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/nexusagent"
+    # Database. The synchronous psycopg2 driver is used at runtime (the app
+    # strips any "+asyncpg" prefix defensively). asyncpg is intentionally NOT a
+    # dependency, so keep this on the psycopg2 dialect.
+    DATABASE_URL: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/nexusagent"
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"

@@ -55,20 +55,20 @@ You don't need an account to see it work:
 ## Quick start (local)
 
 ```bash
-# 1. Start the stack (Postgres, Redis, backend, frontend)
-docker compose up -d
+# One command launches the whole stack (Postgres, Redis, backend, frontend)
+# and seeds the demo workspace (Brightpath org + Aria agent + sample PDFs):
+./run.sh          # macOS / Linux   (or: make dev)
+run.bat           # Windows
 
-# 2. Seed the demo workspace (Brightpath org + Aria agent + sample PDFs)
-pip install -e .
-python backend/scripts/seed_demo.py --init-db
-
-# 3. Open the app
+# Then open the app
 #    Landing:  http://localhost:3000/
 #    Demo:     http://localhost:3000/demo
 #    Sign in:  http://localhost:3000/login   (demo@nexusagent.dev / nexusagent-demo)
 ```
 
-Full guidance: [docs/user-guide/quickstart.md](docs/user-guide/quickstart.md).
+Requires **Docker + Docker Compose** and **Python 3.11+** (verified on 3.13).
+Full guidance, the non-Docker path, and troubleshooting:
+[docs/user-guide/quickstart.md](docs/user-guide/quickstart.md).
 
 ## Repository layout
 
