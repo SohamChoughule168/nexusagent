@@ -21,7 +21,12 @@ from app.core.security import (
 )
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.core.auth_dependencies import get_tenant_context, TenantContext
+from app.core.auth_dependencies import (
+    get_tenant_context,
+    get_current_user,
+    AuthenticatedPrincipal,
+    TenantContext,
+)
 from app.repositories.tenant_repository import RepositoryFactory
 from app.models.user import User
 from app.models.organization import Organization
@@ -35,7 +40,10 @@ from app.schemas.auth import (
     APIKeyCreate,
     APIKeyInfo,
     APIKeyResponse,
+    APIKeyList,
+    MessageResponse,
 )
+from sqlalchemy.exc import IntegrityError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -51,6 +59,17 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
+        )
+
+    # The organization slug is globally unique; surface a friendly 409 (not a
+    # 500 from an IntegrityError) when it collides with an existing org.
+    existing_org = db.query(Organization).filter(
+        Organization.slug == user_data.organization_slug
+    ).first()
+    if existing_org:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Organization slug already in use",
         )
 
     # Create organization
@@ -91,7 +110,14 @@ def register(user_data: UserRegister, db: Session = Depends(get_db)):
     )
     db.add(kb)
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Registration failed: a unique value conflicts with an existing record",
+        )
     db.refresh(user)
     db.refresh(org)
 
@@ -242,29 +268,30 @@ def refresh_token(request: RefreshTokenRequest, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/change-password")
-def change_password(request: PasswordChange, db: Session = Depends(get_db)):
-    """Change user password."""
-    # Get current user from token (would need auth dependency)
-    # For now, we'll accept email + current password
-    user = db.query(User).filter(User.email == request.email).first()
+@router.post("/change-password", response_model=MessageResponse)
+def change_password(
+    request: PasswordChange,
+    current_user: AuthenticatedPrincipal = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Change the authenticated user's password.
 
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-
-    if not verify_password(request.current_password, user.password_hash):
+    Requires a valid Bearer session — the target user is derived from the
+    access token, never from a request body field. The current password is
+    verified before the update, so the account-takeover surface is limited to
+    an attacker who already holds a live session for the account (K1).
+    """
+    if not verify_password(request.current_password, current_user.user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Current password is incorrect",
         )
 
-    user.password_hash = get_password_hash(request.new_password)
+    current_user.user.password_hash = get_password_hash(request.new_password)
     db.commit()
 
-    return {"message": "Password changed successfully"}
+    logger.info("password_changed", user_id=str(current_user.user.id))
+    return MessageResponse(message="Password changed successfully")
 
 
 # API Key endpoints
@@ -304,7 +331,7 @@ def create_api_key(
     )
 
 
-@router.get("/api-keys", response_model=dict)
+@router.get("/api-keys", response_model=APIKeyList)
 def list_api_keys(
     tenant: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
@@ -319,8 +346,8 @@ def list_api_keys(
         .order_by(APIKey.created_at.desc())
         .all()
     )
-    return {
-        "keys": [
+    return APIKeyList(
+        keys=[
             APIKeyInfo(
                 id=str(k.id),
                 name=k.name,
@@ -333,4 +360,4 @@ def list_api_keys(
             )
             for k in keys
         ]
-    }
+    )

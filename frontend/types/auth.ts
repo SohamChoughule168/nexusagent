@@ -42,9 +42,12 @@ export interface RefreshPayload {
   refresh_token: string;
 }
 
-/** Request body for /auth/change-password. */
+/** Request body for /auth/change-password.
+ *
+ * The target user is derived from the active Bearer session — only the current
+ * and new passwords are sent (the backend no longer accepts `email`).
+ */
 export interface PasswordChangePayload {
-  email: string;
   current_password: string;
   new_password: string;
 }

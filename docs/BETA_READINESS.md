@@ -31,7 +31,9 @@ Run before inviting external users. Each item must be ticked or explicitly N/A.
 - [ ] JWT + refresh secrets are unique, non-default, and stored via Secrets
       Manager (not in the image or `.env.production` on disk longer than needed).
 - [ ] `/auth/change-password` reviewed for the no-session (email + current
-      password) design and its abuse surface (see §3 Known issues).
+      password) design and its abuse surface (see §3 Known issues). **Resolved
+      (Milestone A):** the endpoint now requires a Bearer session and derives the
+      user from the token.
 
 ### Operations
 - [ ] Backups (`deploy/backup.sh`) run nightly and a test restore is verified.
@@ -79,15 +81,32 @@ Carried from `RELEASE_NOTES_v1.0.0.md` and verified against the codebase:
 
 | # | Area | Issue | Severity | Status |
 |---|------|-------|----------|--------|
-| K1 | Auth | `POST /auth/change-password` requires only `email` + `current_password` (no session/Bearer). Convenient for no-session resets but widens the account-takeover surface if an attacker already knows the current password. Consider requiring a logged-in session or a reset token. | Medium | Documented; review before GA |
-| K2 | Config | `ALLOWED_EXTENSIONS` advertises 8 types but `ALLOWED_MIME_TYPES` restricts to PDF. Misleading; reconcile or document. | Low | Fix candidate (Phase 8) |
-| K3 | API | Several list endpoints return unbounded results (no pagination/limit/offset). Acceptable at beta scale; add cursor pagination before GA. | Low/Medium | Tracked |
-| K4 | API | `GET /auth/api-keys` uses `response_model=dict` (untyped) and `POST /auth/change-password` returns a raw dict. Low-risk typing cleanup. | Low | Fix candidate (Phase 8) |
-| K5 | Memory | No DB-level RLS on `memories` (see §2). Relies on app-layer isolation. | Medium | By design; monitor |
-| K6 | UX | Registration does not surface a non-unique `organization_slug` as a friendly 409 — a DB IntegrityError surfaces as 500. Better error mapping pre-GA. | Low | Fix candidate |
+| K1 | Auth | `POST /auth/change-password` requires only `email` + `current_password` (no session/Bearer). Convenient for no-session resets but widens the account-takeover surface if an attacker already knows the current password. Consider requiring a logged-in session or a reset token. | Medium (High impact) | **Fixed (Milestone A)** — now requires a Bearer session; the target user is derived from the access token, not the request body. |
+| K2 | Config | `ALLOWED_EXTENSIONS` advertises 8 types but `ALLOWED_MIME_TYPES` restricts to PDF. Misleading; reconcile or document. | Low | Acceptable for GA — documented in `config.py`; only PDF is parsed. Widening ingestion is a post-GA feature. |
+| K3 | API | Several list endpoints return unbounded results (no pagination/limit/offset). Acceptable at beta scale; add cursor pagination before GA. | Low/Medium | Acceptable for GA — current tenant volumes are low; cursor pagination is a fast-follow. |
+| K4 | API | `GET /auth/api-keys` uses `response_model=dict` (untyped) and `POST /auth/change-password` returns a raw dict. Low-risk typing cleanup. | Low | **Fixed (Milestone A)** — both endpoints now return typed models (`APIKeyList`, `MessageResponse`). |
+| K5 | Memory | No DB-level RLS on `memories` (see §2). Relies on app-layer isolation. | Medium | Acceptable for GA — by design (documented in ARCHITECTURE.md); access stays through tenant-scoped services; monitored. |
+| K6 | UX | Registration does not surface a non-unique `organization_slug` as a friendly 409 — a DB IntegrityError surfaces as 500. Better error mapping pre-GA. | Low | **Fixed (Milestone A)** — duplicate slug now returns 409 with a friendly message. |
 
 See `docs/reports/PHASE_6_RELEASE_AUDIT.md` for the full audit, including code
 and config findings.
+
+### 3.1 GA readiness classification (Milestone A)
+
+Re-classified for the GA promotion (see `docs/reports/MILESTONE_A_GA_REPORT.md`):
+
+- **Critical:** none.
+- **High:** K1 (account-takeover surface). **Fixed** — `change-password` now requires a
+  Bearer session; the target user is derived from the access token, never the body.
+- **Medium:** K3 (list pagination), K5 (`memories` isolation). **Carried as acceptable
+  for GA** — see §3 statuses and §7 risk.
+- **Low:** K2 (config wording), K4 (typed responses), K6 (slug 409). K4 and K6 are
+  **fixed**; K2 is acceptable (documented in `config.py`).
+
+**No Critical or High issue remains open.** The single GA-gating item (K1) is resolved,
+and the production API docs (`/docs`, `/redoc`, `/openapi.json`) are now disabled via
+`DOCS_ENABLED=false` (see §4 / `docker-compose.aws.yml`).
+
 
 ---
 
@@ -141,7 +160,7 @@ Short version for the beta on-call:
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
 | Cross-tenant data exposure | Low | Critical | RLS on core tables + app-layer tenant repository; keep all data access through `get_tenant_context`. Monitored in beta. |
-| No-session password change abused (K1) | Low | High | Documented; restrict endpoint or add session/reset-token requirement before GA. |
+| No-session password change abused (K1) | Low | High | **Resolved (Milestone A)** — endpoint now requires a Bearer session. |
 | Migration not backward-compatible → bad rollback | Low | High | Additive migrations in hotfixes; backup before every update; rehearsed rollback. |
 | LLM/embedding key missing → poor answers | Medium | Medium | Clear offline-fallback messaging in UI; require keys for GA answer quality. |
 | Rate-limit exhaustion / abuse | Medium | Medium | App-layer limiter + nginx edge; tighten budget with beta telemetry. |
@@ -150,5 +169,6 @@ Short version for the beta on-call:
 | Single-worker throughput ceiling | Medium | Low | Horizontal scaling guidance; autoscale containers. |
 
 **Overall beta risk:** Moderate and well-contained. No release-blocking issues
-remain for a controlled public beta; K1 and K5 are the items to resolve before a
-general-availability (GA) promotion.
+remain for a controlled public beta. For the GA promotion, K1 (the only High-impact
+item) is resolved; K5 remains by design (app-layer isolation, monitored). K2/K3/K4/K6
+are Low/Medium and either fixed or explicitly accepted for GA (see §3.1).

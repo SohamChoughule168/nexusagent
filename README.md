@@ -87,7 +87,7 @@ docker-compose.yml / docker-compose.aws.yml
 ## Documentation
 
 - [User Guide](docs/user-guide/README.md) — quickstart, knowledge bases, agents,
-  chat & memory, and running the live demo.
+  chat & memory, running the live demo, and the [FAQ](docs/FAQ.md).
 - [ARCHITECTURE.md](ARCHITECTURE.md) — system, backend, frontend, RAG, memory, tools.
 - [OPERATIONS.md](OPERATIONS.md) — deploy, monitor, backup, restore, incident response.
 - [docs/deployment/](docs/deployment/) — local, AWS, security, observability, backups.

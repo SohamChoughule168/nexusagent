@@ -19,6 +19,8 @@ NexusAgent AI (Milestone 7, Phase 6). Pair with
 - [ ] **TLS** — certificates obtained and mounted; `nginx/tls.conf.example`
       activated (HTTP→HTTPS redirect + HSTS). See `production.md` §5.
 - [ ] **Debug off** — `DEBUG=false`; `LOG_FORMAT=json`.
+- [ ] **API docs disabled** — `DOCS_ENABLED=false` (or nginx has no route to
+      `/docs`); `/openapi.json` and `/redoc` are not publicly reachable.
 - [ ] **Container hardening applied** — `docker-compose.aws.yml` hardening keys
       present: `cap_drop: [ALL]`, `read_only: true` + `tmpfs: /tmp` on backend,
       `read_only` + `tmpfs` + `NEXT_TELEMETRY_DISABLED=1` on frontend, resource
@@ -51,6 +53,8 @@ NexusAgent AI (Milestone 7, Phase 6). Pair with
       (no duplicate copies).
 - [ ] **CORS** — browser console shows no CORS errors; only the app origin is
       allowed.
+- [ ] **API docs** — `curl -fsS https://<domain>/docs` returns `404` (disabled
+      in production via `DOCS_ENABLED=false`).
 - [ ] **Rate limit** — a burst past `RATE_LIMIT_PER_MINUTE` returns `429` with a
       `Retry-After` header.
 - [ ] **Auth** — login/refresh/protected endpoints behave; an invalid token

@@ -240,6 +240,13 @@ class Settings(BaseSettings):
     SECURITY_PASSWORD_SALT: str = "change-me-in-production"
     SECURITY_FORCE_DEV_MODE: bool = False
 
+    # Interactive API documentation (Swagger UI / ReDoc / OpenAPI schema).
+    # Useful in development, but it publicly advertises the full API surface, so
+    # it is gated off in production. When False, /docs, /redoc and /openapi.json
+    # are not mounted at all (nginx has no route to them either). The GA
+    # deployment sets DOCS_ENABLED=false.
+    DOCS_ENABLED: bool = True
+
     # Feature Flags
     ENABLE_WEBHOOK_TOOL: bool = True
     ENABLE_LEAD_CAPTURE_TOOL: bool = True

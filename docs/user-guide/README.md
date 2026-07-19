@@ -14,6 +14,7 @@ Everything is isolated per tenant.
 - [Building agents](agents.md) — prompts, models, tools, and memory.
 - [Chat & memory](chat-and-memory.md) — how conversations use short- and long-term memory.
 - [Running the live demo](demo.md) — how to show NexusAgent to a prospective customer.
+- [FAQ](../FAQ.md) — common questions about features, isolation, auth, and the API.
 
 ## Concepts
 
@@ -21,7 +22,7 @@ Everything is isolated per tenant.
 |--------------------|---------------------------------------------------------------------------|
 | Organization       | A tenant. Owns all data; isolated by row-level security.                  |
 | Agent              | A configured assistant with a system prompt, model, knowledge, and tools. |
-| Knowledge base     | A collection of documents (PDFs, text) that agents retrieve from (RAG).   |
+| Knowledge base     | A collection of documents (PDFs in this release) that agents retrieve from (RAG). |
 | Conversation       | A chat session between a user and an agent, with memory and citations.    |
 | Tool               | A capability an agent can call (webhook, lead capture, custom function).  |
 | Memory             | Short-term context + long-term, semantic, consolidated memory.            |

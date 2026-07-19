@@ -56,6 +56,13 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     lifespan=lifespan,
+    # Gate the interactive docs + OpenAPI schema behind DOCS_ENABLED. In
+    # production (DOCS_ENABLED=False) these endpoints are not mounted, so the
+    # API surface is not publicly advertised. nginx is the sole edge and has no
+    # route to them regardless.
+    docs_url="/docs" if settings.DOCS_ENABLED else None,
+    redoc_url="/redoc" if settings.DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if settings.DOCS_ENABLED else None,
 )
 
 # Trusted reverse proxy. When TRUST_PROXY is enabled (production compose, where

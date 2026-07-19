@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { tokenStorage } from "@/lib/token-storage";
 import { authService } from "@/services/auth.service";
+import { getErrorMessage } from "@/lib/api-error";
 import type { AuthUser, LoginCredentials, RegisterPayload } from "@/types/auth";
 
 /**
@@ -58,7 +59,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (err) {
       set({
         isLoading: false,
-        error: err instanceof Error ? err.message : "Login failed",
+        error: getErrorMessage(err),
       });
       throw err;
     }
@@ -79,7 +80,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (err) {
       set({
         isLoading: false,
-        error: err instanceof Error ? err.message : "Registration failed",
+        error: getErrorMessage(err),
       });
       throw err;
     }

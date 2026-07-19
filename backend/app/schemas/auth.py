@@ -27,9 +27,14 @@ class RefreshTokenRequest(BaseModel):
 
 
 class PasswordChange(BaseModel):
-    email: str
     current_password: str
     new_password: str
+
+
+class MessageResponse(BaseModel):
+    """Generic success envelope returned by mutating endpoints."""
+
+    message: str
 
 
 class APIKeyCreate(BaseModel):
@@ -48,6 +53,12 @@ class APIKeyInfo(BaseModel):
     is_active: bool = True
     created_at: Optional[Any] = None
     last_used_at: Optional[Any] = None
+
+
+class APIKeyList(BaseModel):
+    """Typed envelope for the API-key listing endpoint (replaces raw dict)."""
+
+    keys: List[APIKeyInfo] = Field(default_factory=list)
 
 
 class APIKeyResponse(BaseModel):

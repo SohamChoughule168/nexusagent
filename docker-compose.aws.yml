@@ -58,6 +58,9 @@ services:
       DEBUG: "false"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       LOG_FORMAT: "${LOG_FORMAT:-json}"
+      # Disable the interactive API docs + OpenAPI schema in production so the
+      # API surface is not publicly advertised (GA requirement).
+      DOCS_ENABLED: "false"
       # Trusted reverse proxy: nginx is the ONLY public entrypoint here (the
       # backend publishes no host port), so it is safe to honour X-Forwarded-*
       # for correct client IP / url_for. Do NOT enable this when the backend
