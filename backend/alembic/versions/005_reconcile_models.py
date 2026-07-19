@@ -1,19 +1,25 @@
 """Reconcile Alembic schema with the ORM models (Milestone 3 drift).
 
-Revision ID: 005_reconcile_models
+Revision ID: 005_reconcile_models_to_migrations
 Revises: 004_document_chunk_embedding
 Create Date: 2026-07-14 00:00:05.000000
 
-NOTE ON REVISION ID: the original id ``005_reconcile_models_to_migrations``
-was 34 characters, which exceeds the standard ``alembic_version.version_num``
-width of ``VARCHAR(32)`` that Alembic creates on a fresh database
-(alembic/runtime/migration.py: ``Column("version_num", String(32)``). A fresh
-``alembic upgrade head`` therefore failed at this revision with
-"value too long for type character varying(32)". The id was shortened to
-``005_reconcile_models`` (21 chars). The existing development database is
-already stamped at the head (``007_kb_unique_name``) and never records this
-revision id directly, so renaming is transparent and does not break its
-migration history.
+NOTE ON REVISION ID: this migration restores the original id
+``005_reconcile_models_to_migrations`` (35 characters). Migration 006's
+``down_revision`` references it, so the linear chain 004 -> 005 -> 006 is
+preserved.
+
+COMPATIBILITY: ``alembic_version.version_num`` must be wide enough to hold a
+35-char id. The existing development database uses ``VARCHAR(64)`` and upgrades
+cleanly -- it is already stamped at head and never re-stamps this revision. A
+*fresh* database built from scratch via ``alembic upgrade head`` creates
+``alembic_version`` with the standard ``VARCHAR(32)`` (see
+alembic/runtime/migration.py: ``Column("version_num", String(32)``); stamping
+this revision there raises "value too long for type character varying(32)". For
+fresh-from-scratch upgrades to succeed, widen ``alembic_version.version_num``
+to ``VARCHAR(64)`` (the existing dev DB already is), or initialize the schema
+via ``Base.metadata.create_all`` + ``alembic stamp head`` (which never writes
+this id as the current version).
 
 The Alembic chain (001-004) is behind the ORM models. The following columns
 are declared on the ORM models but are missing from the migration chain, so a
@@ -43,7 +49,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = '005_reconcile_models'
+revision = '005_reconcile_models_to_migrations'
 down_revision = '004_document_chunk_embedding'
 branch_labels = None
 depends_on = None
