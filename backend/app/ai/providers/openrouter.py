@@ -1,14 +1,10 @@
 import json
-import time
-import asyncio
 from typing import List, Dict, Any, Optional, AsyncGenerator
 import httpx
 
 from app.ai.providers.base import (
     BaseLLMProvider,
     ProviderType,
-    Message,
-    MessageRole,
     GenerationRequest,
     GenerationResponse,
     StreamChunk,
@@ -362,6 +358,7 @@ class OpenRouterProviderWithFallback:
         if fallback_models:
             models_to_try.extend(fallback_models)
 
+        last_error = None
         for model in models_to_try:
             try:
                 request.model = model
@@ -369,6 +366,7 @@ class OpenRouterProviderWithFallback:
                     yield chunk
                 return  # Success
             except ProviderError as e:
+                last_error = e
                 if not e.retryable:
                     raise
                 continue
