@@ -125,6 +125,14 @@ class KnowledgeBase(MultiTenantModel):
     organization = relationship("Organization", back_populates="knowledge_bases")
     documents = relationship("Document", back_populates="knowledge_base")
 
+    # One KB name per organization. The REST API catches the resulting
+    # IntegrityError and returns 409, so the constraint must exist.
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "name", name="uq_knowledge_bases_org_name"
+        ),
+    )
+
     def __init__(self, organization_id: str, data: Dict[str, Any]):
         self.organization_id = uuid.UUID(organization_id)
         self.name = data.get("name", "")
@@ -241,7 +249,10 @@ class Conversation(MultiTenantModel):
 
 class Message(MultiTenantModel):
     __tablename__ = "messages"
-    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True)
+    # Client-side default (consistent with every other model); the API also sets
+    # ``id`` explicitly, but scripts/fixtures that construct ``Message`` directly
+    # rely on this so the NOT NULL PK is always populated on INSERT.
+    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     conversation_id: str = Column(UUID(as_uuid=True), ForeignKey("conversations.id"), nullable=False, index=True)
     organization_id: str = Column(UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True)
     role: str = Column(String(20), nullable=False)  # 'user', 'assistant', 'system', 'tool'
