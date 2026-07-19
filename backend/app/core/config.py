@@ -3,22 +3,41 @@ from pathlib import Path
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic_settings.sources import DotEnvSettingsSource
+from pydantic_settings.sources import DotEnvSettingsSource, EnvSettingsSource
+
+# List[str] fields that accept a practical comma-separated value (in addition to
+# a JSON list). pydantic-settings JSON-decodes every complex (non-scalar) field
+# *before* any pydantic validator runs, so a value like
+# ``BACKEND_CORS_ORIGINS=http://a,http://b`` would otherwise fail to load. The
+# sources below leave these fields as raw strings so their ``field_validator``
+# can parse both the comma-separated and JSON-list forms. This matters in BOTH
+# the .env file (dotenv source) AND real environment variables (env source) —
+# the containerised deployment has no .env inside the image and passes every
+# value through the environment source (see docker-compose*.yml), so patching
+# only the dotenv source would crash the app on startup.
+_COMMA_LIST_FIELDS = frozenset(
+    {"BACKEND_CORS_ORIGINS", "ALLOWED_EXTENSIONS", "ALLOWED_MIME_TYPES"}
+)
 
 
 class _CorsFriendlyDotEnvSource(DotEnvSettingsSource):
-    """Dotenv source that does not JSON-decode the CORS origins field.
+    """Dotenv source that leaves comma-list fields raw for their validators."""
 
-    pydantic-settings JSON-decodes every complex (non-scalar) field *before*
-    any pydantic validator runs, which makes a practical comma-separated
-    ``BACKEND_CORS_ORIGINS=http://a,http://b`` value fail to load. This source
-    leaves that one field as its raw string so the CORS ``field_validator`` can
-    parse comma-separated lists and JSON lists safely. All other fields keep
-    their normal behaviour.
+    def prepare_field_value(self, field_name, field, value, value_is_complex):
+        if field_name in _COMMA_LIST_FIELDS and isinstance(value, str):
+            return value
+        return super().prepare_field_value(field_name, field, value, value_is_complex)
+
+
+class _CorsFriendlyEnvSource(EnvSettingsSource):
+    """OS-environment source that leaves comma-list fields raw for validators.
+
+    Required for the containerised deployment: images carry no .env, so every
+    setting arrives via real environment variables (docker-compose ``environment:``).
     """
 
     def prepare_field_value(self, field_name, field, value, value_is_complex):
-        if field_name == "BACKEND_CORS_ORIGINS" and isinstance(value, str):
+        if field_name in _COMMA_LIST_FIELDS and isinstance(value, str):
             return value
         return super().prepare_field_value(field_name, field, value, value_is_complex)
 from typing import List, Optional
@@ -51,6 +70,12 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"
 
+    # Build metadata (Phase 4). Injected at image build time via Docker build
+    # args (BUILD_GIT_SHA / BUILD_TIMESTAMP); surfaced by the /version endpoint.
+    # Falls back to "unknown" when the image was built without them (local dev).
+    BUILD_GIT_SHA: Optional[str] = None
+    BUILD_TIMESTAMP: Optional[str] = None
+
     # ---- Observability (Milestone 7, Phase 5) ----
     # Namespace prefixed to every Prometheus metric (e.g. nexusagent_http_*).
     PROMETHEUS_NAMESPACE: str = "nexusagent"
@@ -75,6 +100,25 @@ class Settings(BaseSettings):
     # strips any "+asyncpg" prefix defensively). asyncpg is intentionally NOT a
     # dependency, so keep this on the psycopg2 dialect.
     DATABASE_URL: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/nexusagent"
+
+    # Connection-pool sizing (production tuning, Phase 4). Only applies when
+    # DEBUG is False (in DEBUG we use NullPool so each request gets a fresh
+    # connection — convenient for dev reload, not for throughput). These bound
+    # the SQLAlchemy QueuePool: ``DB_POOL_SIZE`` steady connections + up to
+    # ``DB_MAX_OVERFLOW`` extra under bursts, per backend worker process.
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_TIMEOUT: int = 30
+
+    # Trusted reverse proxy. When true, FastAPI honours ``X-Forwarded-*`` set by
+    # nginx so ``request.client`` reflects the real client and ``url_for`` /
+    # redirects build the public scheme/host. ONLY enable when the backend is
+    # NOT directly reachable from the internet (the nginx/edge is the sole
+    # public entrypoint) — otherwise a client could spoof its IP. The production
+    # compose (docker-compose.aws.yml) enables this because its backend publishes
+    # no host port; the local single-host compose leaves it off because it
+    # publishes :8000 for convenience.
+    TRUST_PROXY: bool = False
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -141,10 +185,16 @@ class Settings(BaseSettings):
         dotenv_settings,
         file_secret_settings,
     ):
-        """Use the CORS-friendly dotenv source instead of the default one."""
+        """Use the comma-list-friendly env + dotenv sources.
+
+        Both the OS-environment and dotenv sources are replaced so
+        comma-separated list values parse correctly whether the app is
+        configured via a .env file (local) or real environment variables
+        (containers — the image carries no .env).
+        """
         return (
             init_settings,
-            env_settings,
+            _CorsFriendlyEnvSource(settings_cls),
             _CorsFriendlyDotEnvSource(settings_cls),
             file_secret_settings,
         )
@@ -160,6 +210,25 @@ class Settings(BaseSettings):
     # MIME types accepted by the Document Upload API this milestone. PDF only
     # for now ("PDF initially"); widen as later milestones add parsers.
     ALLOWED_MIME_TYPES: List[str] = ["application/pdf"]
+
+    @field_validator("ALLOWED_EXTENSIONS", "ALLOWED_MIME_TYPES", mode="before")
+    @classmethod
+    def _parse_str_list(cls, value: object) -> object:
+        """Accept a comma-separated string or a JSON list for these fields.
+
+        Mirrors the CORS parser so operators can set a plain
+        ``ALLOWED_EXTENSIONS=pdf,txt`` in .env / the environment without hitting
+        pydantic-settings' JSON-only decoding of complex fields.
+        """
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("["):
+                return [str(item).strip() for item in json.loads(stripped)]
+            return [item.strip() for item in stripped.split(",") if item.strip()]
+        return value
+
     # Local directory where uploaded raw bytes are persisted (metadata only;
     # no parsing/extraction this milestone). Created on demand.
     UPLOAD_STORAGE_DIR: str = str(ROOT_DIR / "storage" / "uploads")

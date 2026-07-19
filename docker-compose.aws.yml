@@ -35,6 +35,10 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      # Build metadata surfaced by GET /version (falls back to "unknown").
+      args:
+        BUILD_GIT_SHA: "${BUILD_GIT_SHA:-unknown}"
+        BUILD_TIMESTAMP: "${BUILD_TIMESTAMP:-unknown}"
     image: nexusagent-backend:latest
     container_name: nexusagent-backend
     restart: unless-stopped
@@ -54,6 +58,11 @@ services:
       DEBUG: "false"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       LOG_FORMAT: "${LOG_FORMAT:-json}"
+      # Trusted reverse proxy: nginx is the ONLY public entrypoint here (the
+      # backend publishes no host port), so it is safe to honour X-Forwarded-*
+      # for correct client IP / url_for. Do NOT enable this when the backend
+      # port is directly exposed.
+      TRUST_PROXY: "true"
       # JWT secrets - REQUIRED in production (no default; compose fails if empty).
       JWT_SECRET_KEY: "${JWT_SECRET_KEY}"
       JWT_REFRESH_SECRET_KEY: "${JWT_REFRESH_SECRET_KEY}"
@@ -121,6 +130,9 @@ services:
         # The browser calls the BACKEND through nginx on the same origin, so
         # this must be the public origin the UI is served from (https).
         NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL}"
+        # Build metadata (provenance) — falls back to "unknown".
+        BUILD_GIT_SHA: "${BUILD_GIT_SHA:-unknown}"
+        BUILD_TIMESTAMP: "${BUILD_TIMESTAMP:-unknown}"
     image: nexusagent-frontend:latest
     container_name: nexusagent-frontend
     restart: unless-stopped

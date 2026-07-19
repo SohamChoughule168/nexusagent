@@ -1,0 +1,73 @@
+# NexusAgent AI - Development overlay
+#
+# Use TOGETHER WITH docker-compose.yml for a live-reload local dev environment:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# What this overlay changes vs. the production single-host compose:
+#   * Backend: source is bind-mounted into the container and Uvicorn runs with
+#     --reload (PYTHONPATH points at the mounted source, shadowing the
+#     site-packages install). DEBUG=true so you get readable logs + NullPool.
+#   * Frontend: source is bind-mounted and `next dev` serves with hot reload
+#     (NODE_ENV=development, polling enabled for in-container file watching).
+#   * Adds Adminer (http://localhost:8080) for browsing the Postgres database.
+#
+# Hardening (cap_drop, resource limits, health checks) is inherited from
+# docker-compose.yml. We relax read_only/command only so reload can write to
+# the container filesystem. NEVER use this file in production.
+#
+# Note: this file is NOT auto-loaded by `docker compose up` (only
+# docker-compose.override.yml would be). You must pass it explicitly with -f.
+
+services:
+  backend:
+    # Shadow the installed `app` package with the live source so edits reload.
+    # PYTHONPATH is consulted before site-packages, so `import app` resolves to
+    # the mounted source. The image's alembic/ + alembic.ini remain at /app.
+    environment:
+      PYTHONPATH: "/app_src"
+      DEBUG: "true"
+      LOG_FORMAT: "console"
+    volumes:
+      - ./backend:/app_src:rw
+    command: ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --reload"]
+    ports:
+      - "8000:8000"
+    # read_only defaults to false in docker-compose.yml; reload needs to write
+    # __pycache__ / reload state, so ensure the overlay does not enable it.
+
+  frontend:
+    environment:
+      NODE_ENV: "development"
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Poll the bind-mounted source so edits reload inside the container.
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      # Overlay the built image with live source (node_modules / .next are kept
+      # in anonymous volumes so the host mount does not shadow them).
+      - ./frontend:/app:rw
+      - /app/node_modules
+      - /app/.next
+    command: ["sh", "-c", "exec npm run dev -- -p ${PORT:-3000} -H 0.0.0.0"]
+    ports:
+      - "3000:3000"
+
+  # Database browser for local development convenience. Not present in prod.
+  adminer:
+    image: adminer:4-alpine
+    container_name: nexusagent-adminer
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    networks:
+      - nexusagent-net
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -23,11 +23,22 @@ def _sync_database_url() -> str:
 def get_engine():
     global _engine
     if _engine is None:
+        engine_kwargs: dict = {
+            "pool_pre_ping": True,
+            "future": True,
+        }
+        # DEBUG uses NullPool (fresh connection per request — friendly to
+        # auto-reload and short-lived dev sessions). Production uses a bounded
+        # QueuePool sized from configuration so a single worker cannot exhaust
+        # Postgres connections under burst load.
+        if not settings.DEBUG:
+            engine_kwargs["pool_size"] = settings.DB_POOL_SIZE
+            engine_kwargs["max_overflow"] = settings.DB_MAX_OVERFLOW
+            engine_kwargs["pool_timeout"] = settings.DB_POOL_TIMEOUT
         _engine = create_engine(
             _sync_database_url(),
-            pool_pre_ping=True,
             poolclass=NullPool if settings.DEBUG else None,
-            future=True,
+            **engine_kwargs,
         )
     return _engine
 

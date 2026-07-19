@@ -36,6 +36,14 @@ RUN pip install --upgrade pip && \
 # ---- Stage 2: runtime ----
 FROM python:3.11-slim AS runtime
 
+# Build metadata surfaced by GET /version. Injected at build time via
+# --build-arg (e.g. from CI: BUILD_GIT_SHA=$(git rev-parse --short HEAD)).
+# Falls back to "unknown" for local/dev builds.
+ARG BUILD_GIT_SHA=unknown
+ARG BUILD_TIMESTAMP=unknown
+ENV BUILD_GIT_SHA=${BUILD_GIT_SHA} \
+    BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000

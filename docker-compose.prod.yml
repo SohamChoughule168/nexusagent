@@ -1,0 +1,19 @@
+# NexusAgent AI - Production compose (single-host)
+#
+# Explicit production entrypoint. It reuses the full, hardened service
+# definitions in docker-compose.yml (Postgres, Redis, backend, frontend, nginx
+# with health checks, named volumes, networks, restart policies, resource
+# limits, dropped capabilities) by INCLUDING that file.
+#
+# Run with:
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# This is equivalent to `docker compose -f docker-compose.yml up` (the default
+# `docker compose up` already loads docker-compose.yml), provided here so the
+# production file is named explicitly and can be extended with TLS later.
+#
+# For AWS single-instance deployment, use docker-compose.aws.yml instead
+# (RDS + ElastiCache, no bundled db/redis containers, EBS-mounted uploads).
+
+include:
+  - docker-compose.yml

@@ -22,6 +22,14 @@ RUN npm run build
 # ---- Stage 2: runtime ----
 FROM node:20-alpine AS runner
 
+# Build metadata. Injected at build time via --build-arg (e.g. from CI). The
+# frontend does not currently expose /version, but recording the SHA/timestamp
+# here keeps the images self-describing for provenance/audit.
+ARG BUILD_GIT_SHA=unknown
+ARG BUILD_TIMESTAMP=unknown
+ENV BUILD_GIT_SHA=${BUILD_GIT_SHA} \
+    BUILD_TIMESTAMP=${BUILD_TIMESTAMP}
+
 ENV NODE_ENV=production \
     PORT=3000
 

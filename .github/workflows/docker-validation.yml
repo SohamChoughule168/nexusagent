@@ -43,8 +43,15 @@ jobs:
 
       - name: Build backend image
         # Context = repo root (see header note). Tags locally for the run only.
-        run: docker build -f backend/Dockerfile -t nexusagent-backend:ci .
+        # Injects build metadata into GET /version (falls back to "unknown").
+        run: |
+          docker build -f backend/Dockerfile -t nexusagent-backend:ci \
+            --build-arg "BUILD_GIT_SHA=${GITHUB_SHA::7}" \
+            --build-arg "BUILD_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)" .
 
       - name: Build frontend image
         # Context = ./frontend (matches frontend/Dockerfile COPY instructions).
-        run: docker build -f frontend/Dockerfile -t nexusagent-frontend:ci frontend/
+        run: |
+          docker build -f frontend/Dockerfile -t nexusagent-frontend:ci \
+            --build-arg "BUILD_GIT_SHA=${GITHUB_SHA::7}" \
+            --build-arg "BUILD_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)" frontend/

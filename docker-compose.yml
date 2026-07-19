@@ -69,6 +69,10 @@ services:
       # package-dir mapping). Using ./backend here would break the build.
       context: .
       dockerfile: backend/Dockerfile
+      # Build metadata surfaced by GET /version (falls back to "unknown").
+      args:
+        BUILD_GIT_SHA: "${BUILD_GIT_SHA:-unknown}"
+        BUILD_TIMESTAMP: "${BUILD_TIMESTAMP:-unknown}"
     image: nexusagent-backend:latest
     container_name: nexusagent-backend
     restart: unless-stopped
@@ -148,6 +152,9 @@ services:
         # Inlined into the client bundle at build time. The browser calls the
         # backend directly, so this is the origin the user loads the UI from.
         NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000/api/v1}"
+        # Build metadata (provenance) — falls back to "unknown".
+        BUILD_GIT_SHA: "${BUILD_GIT_SHA:-unknown}"
+        BUILD_TIMESTAMP: "${BUILD_TIMESTAMP:-unknown}"
     image: nexusagent-frontend:latest
     container_name: nexusagent-frontend
     restart: unless-stopped

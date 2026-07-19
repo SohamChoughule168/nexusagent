@@ -11,6 +11,8 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestIDMiddleware, SecurityHeadersMiddleware
 from app.core.rate_limit import RateLimitMiddleware
+# Proxy-header handling ships with uvicorn (starlette has no equivalent module).
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from app.core.observability_middleware import (
     AccessLogMiddleware,
     MetricsMiddleware,
@@ -42,6 +44,14 @@ app = FastAPI(
     version=settings.APP_VERSION,
     lifespan=lifespan,
 )
+
+# Trusted reverse proxy. When TRUST_PROXY is enabled (production compose, where
+# nginx is the sole public entrypoint and the backend publishes no host port),
+# honour X-Forwarded-* so request.client reports the real client IP and
+# url_for()/redirects build the public scheme/host. See Settings.TRUST_PROXY for
+# the security rationale — never enable this while the backend port is exposed.
+if settings.TRUST_PROXY:
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # Middleware order: first added is OUTERMOST. RequestIDMiddleware stays last so
 # it assigns ``request.state.request_id`` *before* the observability middleware
@@ -138,3 +148,55 @@ async def health_startup() -> dict:
 @app.get("/", tags=["root"])
 async def root() -> dict:
     return {"name": settings.APP_NAME, "version": settings.APP_VERSION}
+
+
+# --------------------------------------------------------------------------- #
+# Canonical probe aliases (Phase 4)
+#
+# Kubernetes / cloud load-balancers commonly expect /liveness and /ready by
+# those exact names. They mirror the /health/live and /health/ready probes so
+# existing and conventional probe paths both work.
+# --------------------------------------------------------------------------- #
+@app.get("/liveness", tags=["health"])
+async def liveness_alias() -> dict:
+    """Liveness probe alias — process is alive."""
+    from app.core import health as health_module
+
+    return health_module.liveness()
+
+
+@app.get("/ready", tags=["health"])
+async def ready_alias() -> JSONResponse:
+    """Readiness probe alias — dependency health aggregate."""
+    from app.core import health as health_module
+
+    payload, status_code = await health_module.readiness()
+    return JSONResponse(status_code=status_code, content=payload)
+
+
+@app.get("/health/db", tags=["health"])
+async def health_db() -> JSONResponse:
+    """Standalone PostgreSQL dependency check."""
+    from app.core import health as health_module
+
+    result = await health_module.check_database()
+    status_code = 200 if result["status"] == "ok" else 503
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@app.get("/health/redis", tags=["health"])
+async def health_redis() -> JSONResponse:
+    """Standalone Redis dependency check."""
+    from app.core import health as health_module
+
+    result = await health_module.check_redis()
+    status_code = 200 if result["status"] == "ok" else 503
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@app.get("/version", tags=["meta"])
+async def version() -> dict:
+    """Build / version metadata for the running image (Phase 4)."""
+    from app.core.build_info import get_build_info
+
+    return get_build_info()
