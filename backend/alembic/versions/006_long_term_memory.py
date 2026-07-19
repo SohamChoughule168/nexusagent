@@ -28,7 +28,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = '006_long_term_memory'
-down_revision = '005_reconcile_models_to_migrations'
+down_revision = '005_reconcile_models'
 branch_labels = None
 depends_on = None
 
