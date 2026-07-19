@@ -6,7 +6,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from app.api.v1.router import api_router
-from app.core.config import settings
+from app.core.config import ConfigurationError, settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestIDMiddleware, SecurityHeadersMiddleware
@@ -27,6 +27,19 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("startup_begin", version=settings.APP_VERSION)
+
+    # Fail fast on invalid production configuration. Under pytest we downgrade
+    # to a warning so the existing test suite can run with development defaults
+    # (mirrors the rate-limiter's pytest guard in this module).
+    try:
+        settings.validate()
+    except ConfigurationError as exc:
+        if _under_pytest():
+            logger.warning("startup_config_invalid", detail=str(exc))
+        else:
+            logger.error("startup_config_invalid", detail=str(exc))
+            raise
+
     await init_redis()
     # Mark startup complete so the /health/startup probe flips to "started".
     from app.core import health as health_module

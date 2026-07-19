@@ -256,38 +256,65 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
 
     def validate(self) -> None:
-        """Validate required configuration without leaking secret values.
+        """Validate required configuration and fail fast in production.
 
-        Raises ConfigurationError if required values are empty. Logs a
-        warning (does not raise) when insecure development defaults are used.
+        Production (``DEBUG is False``) refuses to start when a required secret
+        or connection string is missing or still set to an insecure development
+        default, or when a remote LLM/embeddings provider is selected without
+        its API key. Development (``DEBUG is True``) only logs warnings so local
+        workflows can keep using defaults. Secret values are never logged.
         """
-        missing = []
+        # Values that must never survive into a production deployment.
+        insecure = {"", "change-me", "change-me-in-production", "changeme", "change_me"}
+
+        errors: list[str] = []
+
+        # Crypto secrets: JWT signing + password-hashing salt.
+        for name in ("JWT_SECRET_KEY", "JWT_REFRESH_SECRET_KEY", "SECURITY_PASSWORD_SALT"):
+            value = getattr(self, name)
+            if not value or value in insecure:
+                errors.append(f"{name} is missing or uses an insecure default")
+
+        # Required connection strings (managed services in production).
         if not self.DATABASE_URL:
-            missing.append("DATABASE_URL")
-        if not self.JWT_SECRET_KEY:
-            missing.append("JWT_SECRET_KEY")
-        if not self.JWT_REFRESH_SECRET_KEY:
-            missing.append("JWT_REFRESH_SECRET_KEY")
-        if missing:
-            raise ConfigurationError(
-                "Missing required configuration: " + ", ".join(missing)
-            )
+            errors.append("DATABASE_URL is missing")
+        if not self.REDIS_URL:
+            errors.append("REDIS_URL is missing")
 
-        insecure_secrets = {
-            "JWT_SECRET_KEY": self.JWT_SECRET_KEY,
-            "JWT_REFRESH_SECRET_KEY": self.JWT_REFRESH_SECRET_KEY,
-            "SECURITY_PASSWORD_SALT": self.SECURITY_PASSWORD_SALT,
+        # Remote LLM / embeddings providers require their API key. The "local"
+        # providers have offline fallbacks, so they are exempt — this honours
+        # the documented offline mode while still refusing to boot an
+        # openrouter/openai configuration with no key.
+        provider_keys = {
+            "openrouter": self.OPENROUTER_API_KEY,
+            "openai": self.OPENAI_API_KEY,
         }
-        for name, value in insecure_secrets.items():
-            if value in ("change-me-in-production", "change-me", ""):
-                # Imported lazily to avoid a logging import cycle at startup.
-                from app.core.logging import get_logger
+        for setting, provider in (
+            ("EMBEDDINGS_PROVIDER", self.EMBEDDINGS_PROVIDER),
+            ("RAG_LLM_PROVIDER", self.RAG_LLM_PROVIDER),
+        ):
+            if provider in provider_keys and not provider_keys[provider]:
+                errors.append(f"{setting}={provider} is set but its API key is missing")
 
+        if not errors:
+            return
+
+        if self.DEBUG:
+            # Development: surface misconfiguration but keep booting.
+            from app.core.logging import get_logger
+
+            for err in errors:
                 get_logger(__name__).warning(
-                    "insecure_default_secret",
-                    setting=name,
-                    msg="Using an insecure default secret; set a strong value in production",
+                    "config_insecure_default",
+                    detail=err,
+                    msg="Insecure/incomplete configuration (development mode: not fatal)",
                 )
+            return
+
+        raise ConfigurationError(
+            "Refusing to start with invalid production configuration: "
+            + "; ".join(errors)
+        )
 
 
 settings = Settings()
