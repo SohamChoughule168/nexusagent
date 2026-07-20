@@ -21,6 +21,10 @@ from app.models.all_models import (
     ToolConfig,
     Tool,
     Memory,
+    Notification,
+    WebhookSubscription,
+    WebhookDelivery,
+    BackgroundTask,
 )
 
 T = TypeVar('T', bound=Base)
@@ -175,6 +179,38 @@ class DocumentRepository(TenantAwareRepository[Document]):
         stmt = self._apply_tenant_filter(stmt)
         return list(self.db.execute(stmt).scalars().all())
 
+    def find(
+        self,
+        kb_id: Optional[uuid.UUID] = None,
+        status: Optional[str] = None,
+        tag: Optional[str] = None,
+        search: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Document]:
+        """List documents with optional filters (Milestone B, Step 2).
+
+        ``kb_id`` scopes to a knowledge base, ``status`` to a lifecycle state,
+        ``tag`` to a metadata tag (ARRAY containment), and ``search`` does a
+        case-insensitive substring match on title / filename. Results are
+        paginated via ``limit`` / ``offset``.
+        """
+        stmt = select(Document)
+        if kb_id is not None:
+            stmt = stmt.where(Document.knowledge_base_id == kb_id)
+        if status is not None:
+            stmt = stmt.where(Document.status == status)
+        if tag is not None:
+            stmt = stmt.where(Document.tags.any(tag))
+        if search:
+            like = f"%{search}%"
+            stmt = stmt.where(
+                (Document.title.ilike(like)) | (Document.filename.ilike(like))
+            )
+        stmt = self._apply_tenant_filter(stmt)
+        stmt = stmt.limit(limit).offset(offset).order_by(Document.created_at.desc())
+        return list(self.db.execute(stmt).scalars().all())
+
 
 class DocumentChunkRepository(TenantAwareRepository[DocumentChunk]):
     def __init__(self, db: Session, organization_id: uuid.UUID):
@@ -285,12 +321,15 @@ class ToolRepository(TenantAwareRepository[Tool]):
         tool_type: str = None,
         is_active: bool = None,
         search: str = None,
+        allowed_role: str = None,
     ) -> List[Tool]:
         """Discover tools within the tenant using optional filters.
 
-        ``tool_type`` narrows by type, ``is_active`` by enabled state, and
-        ``search`` does a case-insensitive substring match across name,
-        display_name, and description.
+        ``tool_type`` narrows by type, ``is_active`` by enabled state,
+        ``search`` does a case-insensitive substring match across name /
+        display_name / description, and ``allowed_role`` restricts to tools
+        whose ``allowed_roles`` allow-list includes the role (or that have no
+        allow-list, i.e. open to all members).
         """
         stmt = select(Tool)
         if tool_type is not None:
@@ -303,6 +342,13 @@ class ToolRepository(TenantAwareRepository[Tool]):
                 (Tool.name.ilike(like))
                 | (Tool.display_name.ilike(like))
                 | (Tool.description.ilike(like))
+            )
+        if allowed_role is not None:
+            # Open tools (empty allow-list) OR explicitly list the role.
+            stmt = stmt.where(
+                Tool.allowed_roles.is_(None)
+                | (Tool.allowed_roles == "{}")
+                | (Tool.allowed_roles.any(allowed_role))
             )
         stmt = self._apply_tenant_filter(stmt)
         return list(self.db.execute(stmt).scalars().all())
@@ -405,3 +451,56 @@ class RepositoryFactory:
 
     def memories(self) -> MemoryRepository:
         return MemoryRepository(self.db, self.organization_id)
+
+    def notifications(self) -> "NotificationRepository":
+        return NotificationRepository(self.db, self.organization_id)
+
+    def webhook_subscriptions(self) -> "WebhookSubscriptionRepository":
+        return WebhookSubscriptionRepository(self.db, self.organization_id)
+
+    def webhook_deliveries(self) -> "WebhookDeliveryRepository":
+        return WebhookDeliveryRepository(self.db, self.organization_id)
+
+    def background_tasks(self) -> "BackgroundTaskRepository":
+        return BackgroundTaskRepository(self.db, self.organization_id)
+
+
+class NotificationRepository(TenantAwareRepository[Notification]):
+    def __init__(self, db: Session, organization_id: uuid.UUID):
+        super().__init__(db, organization_id, Notification)
+
+    def get_unread(self, user_id: Optional[uuid.UUID] = None) -> List[Notification]:
+        stmt = select(Notification).where(Notification.read.is_(False))
+        if user_id is not None:
+            stmt = stmt.where(Notification.user_id == user_id)
+        stmt = self._apply_tenant_filter(stmt)
+        stmt = stmt.order_by(Notification.created_at.desc())
+        return list(self.db.execute(stmt).scalars().all())
+
+
+class WebhookSubscriptionRepository(TenantAwareRepository[WebhookSubscription]):
+    def __init__(self, db: Session, organization_id: uuid.UUID):
+        super().__init__(db, organization_id, WebhookSubscription)
+
+    def get_active_for_event(self, event_type: str) -> List[WebhookSubscription]:
+        stmt = select(WebhookSubscription).where(
+            WebhookSubscription.event_type == event_type,
+            WebhookSubscription.is_active.is_(True),
+        )
+        stmt = self._apply_tenant_filter(stmt)
+        return list(self.db.execute(stmt).scalars().all())
+
+
+class WebhookDeliveryRepository(TenantAwareRepository[WebhookDelivery]):
+    def __init__(self, db: Session, organization_id: uuid.UUID):
+        super().__init__(db, organization_id, WebhookDelivery)
+
+
+class BackgroundTaskRepository(TenantAwareRepository[BackgroundTask]):
+    def __init__(self, db: Session, organization_id: uuid.UUID):
+        super().__init__(db, organization_id, BackgroundTask)
+
+    def get_by_type(self, task_type: str) -> List[BackgroundTask]:
+        stmt = select(BackgroundTask).where(BackgroundTask.task_type == task_type)
+        stmt = self._apply_tenant_filter(stmt)
+        return list(self.db.execute(stmt).scalars().all())

@@ -93,18 +93,32 @@ async def check_storage() -> Dict[str, Any]:
 
 
 async def check_llm() -> Dict[str, Any]:
-    """Non-destructive LLM provider connectivity probe."""
-    if not settings.OPENROUTER_API_KEY:
+    """Non-destructive LLM provider connectivity probe.
+
+    Checks whichever provider is selected by ``RAG_LLM_PROVIDER``; the local
+    composer and self-hosted Ollama need no remote connectivity check.
+    """
+    from app.ai.providers.factory import active_llm_provider_name, llm_provider_base_url
+
+    name = active_llm_provider_name(settings)
+    if name in ("local", "ollama"):
         return {
             "name": "llm",
             "status": "skipped",
-            "detail": "no provider API key configured",
+            "detail": f"{name} provider (no remote connectivity probe)",
+        }
+    base = llm_provider_base_url(name, settings)
+    if not base:
+        return {
+            "name": "llm",
+            "status": "skipped",
+            "detail": "no provider endpoint configured",
         }
     import httpx
 
     try:
         async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as client:
-            resp = await client.head(settings.OPENROUTER_BASE_URL)
+            resp = await client.head(base)
             auth_codes = (401, 403, 405)
             if resp.status_code >= 400 and resp.status_code not in auth_codes:
                 return {
@@ -115,7 +129,7 @@ async def check_llm() -> Dict[str, Any]:
             return {
                 "name": "llm",
                 "status": "ok",
-                "detail": f"reachable ({settings.OPENROUTER_BASE_URL})",
+                "detail": f"reachable ({name}: {base})",
             }
     except Exception as exc:  # noqa: BLE001
         return {"name": "llm", "status": "degraded", "detail": str(exc)}

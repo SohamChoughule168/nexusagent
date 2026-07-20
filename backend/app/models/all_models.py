@@ -158,12 +158,20 @@ class Document(MultiTenantModel):
     file_size: int = Column(Integer, nullable=False)
     storage_path: str = Column(String(500), nullable=False)
     status: str = Column(String(20), default="uploaded", nullable=False)
+    # Indexing progress (Milestone B, Step 2): coarse lifecycle status plus an
+    # integer percent and chunk counters so the UI can show real progress.
+    indexing_progress: int = Column(Integer, default=0, nullable=False)
+    total_chunks: int = Column(Integer, default=0, nullable=False)
+    indexed_chunks: int = Column(Integer, default=0, nullable=False)
+    last_indexed_at: Optional[datetime] = Column(DateTime(timezone=True), nullable=True)
     page_count: int = Column(Integer, default=0)
     chunk_count: int = Column(Integer, default=0)
     error_message: Optional[str] = Column(Text)
     # NOTE: the attribute is named ``meta`` (not ``metadata``) because
     # ``metadata`` is reserved by SQLAlchemy's declarative Base.
     meta: Dict[str, Any] = Column("metadata", JSONB, default=dict)
+    # Free-form tags for metadata filtering at search/retrieval time.
+    tags: List[str] = Column(ARRAY(String), default=list)
     upload_member_id: str = Column(UUID(as_uuid=True), nullable=False)  # Reference to User.id
 
     # Relationships
@@ -364,6 +372,11 @@ class UsageEvent(MultiTenantModel):
     output_tokens: int = Column(Integer, default=0)
     total_tokens: int = Column(Integer, default=0)
     cost_usd: float = Column(Float(), default=0.0)
+    # Milestone B, Step 5 — analytics. Latency of the underlying operation
+    # (ms), a coarse outcome status, and any error text for the errors view.
+    latency_ms: Optional[int] = Column(Integer, nullable=True)
+    status: Optional[str] = Column(String(20), nullable=True)  # success|error|timeout
+    error: Optional[str] = Column(Text, nullable=True)
     meta: Dict[str, Any] = Column("metadata", JSONB, default=dict)
     created_at: datetime = Column(DateTime(timezone=True), default=datetime.utcnow)
 
@@ -378,6 +391,9 @@ class UsageEvent(MultiTenantModel):
         self.output_tokens = data.get("output_tokens", 0)
         self.total_tokens = data.get("total_tokens", 0)
         self.cost_usd = data.get("cost_usd", 0.0)
+        self.latency_ms = data.get("latency_ms")
+        self.status = data.get("status")
+        self.error = data.get("error")
         self.meta = data.get("metadata", {})
 
 
@@ -442,6 +458,23 @@ class Tool(MultiTenantModel):
     config: Dict[str, Any] = Column(JSONB, default=dict)
     input_schema: Dict[str, Any] = Column(JSONB, nullable=False, default=dict)
     is_active: bool = Column(Boolean, default=True, nullable=True)
+    # Milestone B, Step 3 — tool ecosystem improvements.
+    # Per-tool execution timeout (seconds). When set, overrides the engine-wide
+    # TOOL_EXECUTION_TIMEOUT_SECONDS default for this tool only.
+    timeout_seconds: Optional[int] = Column(Integer, nullable=True)
+    # Role allow-list for *execution*. Empty list == any tenant member may run
+    # the tool (the historical default). Non-empty restricts execution to the
+    # listed roles in addition to the tenant-isolation check.
+    allowed_roles: List[str] = Column(ARRAY(String), default=list)
+    # Human-facing documentation surfaced to the LLM and in the tool catalogue.
+    documentation: Optional[str] = Column(Text, nullable=True)
+    # Last health probe result (Milestone B, Step 3) for webhook-type tools.
+    health_status: Optional[str] = Column(String(20), nullable=True)  # ok|degraded|down|unknown
+    last_checked_at: Optional[datetime] = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", "name", name="uq_tools_org_name"),
+    )
 
     def __init__(self, organization_id: str, data: Dict[str, Any]):
         org_id = (
@@ -457,6 +490,9 @@ class Tool(MultiTenantModel):
         self.config = data.get("config") or {}
         self.input_schema = data.get("input_schema") or {}
         self.is_active = data.get("is_active", True)
+        self.timeout_seconds = data.get("timeout_seconds")
+        self.allowed_roles = data.get("allowed_roles") or []
+        self.documentation = data.get("documentation")
 
 
 class Memory(MultiTenantModel):
@@ -539,3 +575,116 @@ class Memory(MultiTenantModel):
         self.agent_id = uuid.UUID(str(agent_id)) if agent_id else None
         self.user_id = uuid.UUID(str(user_id)) if user_id else None
         self.meta = metadata or {}
+
+
+# ---------------------------------------------------------------------------
+# Milestone B — notifications, webhooks, background tasks
+# ---------------------------------------------------------------------------
+
+
+class Notification(MultiTenantModel):
+    """In-app (system) notification delivered to an organization's users."""
+
+    __tablename__ = "notifications"
+
+    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: str = Column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    user_id: Optional[str] = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
+    )
+    type: str = Column(String(50), nullable=False)  # e.g. 'escalation', 'lead', 'system'
+    title: str = Column(String(255), nullable=False)
+    body: Optional[str] = Column(Text, nullable=True)
+    read: bool = Column(Boolean, default=False, nullable=False)
+    meta: Dict[str, Any] = Column("metadata", JSONB, default=dict)
+
+    def __init__(self, organization_id: str, data: Dict[str, Any]):
+        self.organization_id = uuid.UUID(str(organization_id))
+        user_id = data.get("user_id")
+        self.user_id = uuid.UUID(str(user_id)) if user_id else None
+        self.type = data.get("type", "system")
+        self.title = data.get("title", "")
+        self.body = data.get("body")
+        self.read = data.get("read", False)
+        self.meta = data.get("metadata") or {}
+
+
+class WebhookSubscription(MultiTenantModel):
+    """A tenant's subscription to platform events delivered to an external URL."""
+
+    __tablename__ = "webhook_subscriptions"
+
+    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: str = Column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    event_type: str = Column(String(50), nullable=False)  # 'tool_executed', 'document_indexed', ...
+    url: str = Column(String(500), nullable=False)
+    secret: Optional[str] = Column(String(255), nullable=True)  # HMAC signature key
+    is_active: bool = Column(Boolean, default=True, nullable=False)
+    created_at: datetime = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    def __init__(self, organization_id: str, data: Dict[str, Any]):
+        self.organization_id = uuid.UUID(str(organization_id))
+        self.event_type = data.get("event_type", "")
+        self.url = data.get("url", "")
+        self.secret = data.get("secret")
+        self.is_active = data.get("is_active", True)
+
+
+class WebhookDelivery(MultiTenantModel):
+    """An attempt to deliver an event to a webhook subscription."""
+
+    __tablename__ = "webhook_deliveries"
+
+    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: str = Column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    subscription_id: str = Column(
+        UUID(as_uuid=True), ForeignKey("webhook_subscriptions.id"), nullable=False, index=True
+    )
+    event_type: str = Column(String(50), nullable=False)
+    status: str = Column(String(20), default="pending", nullable=False)  # pending|success|failed
+    response_status: Optional[int] = Column(Integer, nullable=True)
+    attempt_count: int = Column(Integer, default=0, nullable=False)
+    last_error: Optional[str] = Column(Text, nullable=True)
+    created_at: datetime = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    def __init__(self, organization_id: str, data: Dict[str, Any]):
+        self.organization_id = uuid.UUID(str(organization_id))
+        self.subscription_id = uuid.UUID(str(data.get("subscription_id")))
+        self.event_type = data.get("event_type", "")
+        self.status = data.get("status", "pending")
+        self.response_status = data.get("response_status")
+        self.attempt_count = data.get("attempt_count", 0)
+        self.last_error = data.get("last_error")
+
+
+class BackgroundTask(MultiTenantModel):
+    """A long-running job (ingestion / embedding) tracked for status polling."""
+
+    __tablename__ = "background_tasks"
+
+    id: uuid.UUID = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id: str = Column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True
+    )
+    task_type: str = Column(String(50), nullable=False)  # 'document_ingest', 'document_embed'
+    status: str = Column(String(20), default="pending", nullable=False)
+    # 'pending' | 'running' | 'done' | 'failed'
+    progress: int = Column(Integer, default=0, nullable=False)  # 0-100
+    result: Dict[str, Any] = Column(JSONB, default=dict)
+    error: Optional[str] = Column(Text, nullable=True)
+    started_at: Optional[datetime] = Column(DateTime(timezone=True), nullable=True)
+    finished_at: Optional[datetime] = Column(DateTime(timezone=True), nullable=True)
+
+    def __init__(self, organization_id: str, data: Dict[str, Any]):
+        self.organization_id = uuid.UUID(str(organization_id))
+        self.task_type = data.get("task_type", "")
+        self.status = data.get("status", "pending")
+        self.progress = data.get("progress", 0)
+        self.result = data.get("result") or {}
+        self.error = data.get("error")

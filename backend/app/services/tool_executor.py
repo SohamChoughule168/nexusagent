@@ -242,16 +242,42 @@ class ToolExecutionEngine:
         self,
         tool: Tool,
         arguments: Optional[Dict[str, Any]] = None,
+        caller_role: Optional[str] = None,
     ) -> ToolResult:
         """Execute a concrete ``Tool`` model with ``arguments``.
 
         Never raises: every failure path yields a ``ToolResult`` with
         ``success=False``. The strategy is resolved up-front so an unknown
         ``tool_type`` surfaces as a controlled error result.
+
+        ``caller_role`` (Milestone B — tool permissions) enforces the tool's
+        ``allowed_roles`` allow-list: when the tool restricts execution to
+        certain roles and the caller's role is not among them, the run is
+        refused with ``error_type="permission_denied"``. Omit ``caller_role``
+        (e.g. internal callers) to skip the check.
         """
         started = datetime.now(timezone.utc)
         execution_id = str(uuid.uuid4())
         args = arguments or {}
+
+        # Milestone B: tool-permission enforcement (role allow-list).
+        allowed = list(tool.allowed_roles or [])
+        if allowed and caller_role is not None and caller_role not in allowed:
+            logger.warning(
+                "tool_execution_permission_denied",
+                tool_id=str(tool.id) if getattr(tool, "id", None) else None,
+                tool_name=tool.name,
+                caller_role=caller_role,
+                allowed_roles=allowed,
+            )
+            return self._error_result(
+                tool, execution_id, started, args,
+                error=(
+                    f"role '{caller_role}' is not permitted to execute this tool; "
+                    f"allowed roles: {allowed}"
+                ),
+                error_type="permission_denied",
+            )
 
         # Argument validation (execution correctness) before any side effects.
         validation_errors = validate_arguments(tool.input_schema, args)
@@ -324,12 +350,14 @@ class ToolExecutionEngine:
         organization_id: uuid.UUID,
         arguments: Optional[Dict[str, Any]] = None,
         db: Optional[Any] = None,
+        caller_role: Optional[str] = None,
     ) -> ToolResult:
         """Tenant-scoped execution: resolve the tool *within* ``organization_id``.
 
         Reuses ``ToolRepository`` (via ``RepositoryFactory``), so tenant isolation
         is enforced by the query filter -- a tool owned by another tenant resolves
-        to ``None`` and yields a not-found error result.
+        to ``None`` and yields a not-found error result. ``caller_role`` is
+        forwarded to :meth:`execute` for ``allowed_roles`` enforcement.
         """
         if db is None:
             raise ValueError("execute_by_id requires a database session")
@@ -348,7 +376,7 @@ class ToolExecutionEngine:
                 started_at=datetime.now(timezone.utc),
                 meta={"organization_id": str(organization_id)},
             )
-        return self.execute(tool, arguments)
+        return self.execute(tool, arguments, caller_role=caller_role)
 
     # --- Strategies ---------------------------------------------------------
 
@@ -374,7 +402,14 @@ class ToolExecutionEngine:
             raise ToolExecutionError("webhook endpoint must be an http(s) URL")
         method = str(config.get("method") or "POST").upper()
         headers = dict(config.get("headers") or {})
-        timeout = float(config.get("timeout") or self._default_timeout)
+        # Milestone B: a per-tool timeout overrides both the engine default and
+        # any request-level config timeout. ``tool.timeout_seconds`` is None for
+        # tools that inherit the engine-wide default.
+        timeout = float(
+            tool.timeout_seconds
+            or config.get("timeout")
+            or self._default_timeout
+        )
         # Send the supplied arguments (or a configured static body) as JSON.
         body = config.get("body") or args
         with httpx.Client(timeout=timeout) as client:

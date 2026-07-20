@@ -14,6 +14,7 @@ from app.schemas.knowledge_base import (
     KnowledgeBaseResponse,
     KnowledgeBaseUpdate,
 )
+from app.services.audit import record_audit
 from app.services.tenant_context import TenantContext
 
 router = APIRouter(prefix="/knowledge-bases", tags=["knowledge-bases"])
@@ -53,7 +54,7 @@ def create_knowledge_base(
     )
 
     try:
-        return kbs_repo.create(kb)
+        created = kbs_repo.create(kb)
     except IntegrityError:
         # The live schema enforces a UNIQUE (organization_id, name) constraint.
         db.rollback()
@@ -61,6 +62,12 @@ def create_knowledge_base(
             status_code=status.HTTP_409_CONFLICT,
             detail="A knowledge base with this name already exists",
         )
+    record_audit(
+        db, tenant.organization_id, "kb.create",
+        user_id=str(tenant.user_id), resource_type="knowledge_base",
+        resource_id=str(created.id), meta={"name": created.name},
+    )
+    return created
 
 
 @router.get("/", response_model=List[KnowledgeBaseResponse])
@@ -118,13 +125,19 @@ def update_knowledge_base(
         setattr(kb, field, value)
 
     try:
-        return kbs_repo.update(kb)
+        updated = kbs_repo.update(kb)
     except IntegrityError:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A knowledge base with this name already exists",
         )
+    record_audit(
+        db, tenant.organization_id, "kb.update",
+        user_id=str(tenant.user_id), resource_type="knowledge_base",
+        resource_id=str(updated.id), meta={"fields": list(update_fields.keys())},
+    )
+    return updated
 
 
 @router.delete("/{kb_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -146,3 +159,8 @@ def delete_knowledge_base(
         )
 
     kbs_repo.delete(kb)
+    record_audit(
+        db, tenant.organization_id, "kb.delete",
+        user_id=str(tenant.user_id), resource_type="knowledge_base",
+        resource_id=str(kb_uuid),
+    )

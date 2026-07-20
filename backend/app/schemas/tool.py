@@ -1,5 +1,5 @@
 """Pydantic schemas for the Tool Registry API (Milestone 4, Phase 1)."""
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -18,6 +18,13 @@ class ToolBase(BaseModel):
     config: Optional[Dict[str, Any]] = None
     input_schema: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
+    # Milestone B — tool ecosystem improvements.
+    # Per-tool execution timeout (seconds); overrides the engine default.
+    timeout_seconds: Optional[int] = Field(None, ge=1, le=86400)
+    # Role allow-list for *execution*. Empty list == any tenant member may run.
+    allowed_roles: Optional[List[str]] = None
+    # Human-facing documentation surfaced to the LLM and tool catalogue.
+    documentation: Optional[str] = None
 
 
 class ToolCreate(ToolBase):
@@ -68,6 +75,12 @@ class ToolResponse(ToolBase):
     is_active: Optional[bool] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    # Milestone B — surfaced tool-ecosystem fields.
+    timeout_seconds: Optional[int] = None
+    allowed_roles: List[str] = Field(default_factory=list)
+    documentation: Optional[str] = None
+    health_status: Optional[str] = None
+    last_checked_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

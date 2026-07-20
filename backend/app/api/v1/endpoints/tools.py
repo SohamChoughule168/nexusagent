@@ -1,6 +1,8 @@
 import uuid
+from datetime import datetime, timezone
 from typing import List, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 
@@ -15,8 +17,10 @@ from app.schemas.tool import (
     ToolResponse,
     ToolUpdate,
 )
+from app.services.audit import record_audit
 from app.services.tool_executor import ToolExecutionEngine
 from app.services.tool_registry import SUPPORTED_TOOL_TYPES
+from app.services.usage import record_event
 from app.services.tenant_context import TenantContext
 
 router = APIRouter(prefix="/tools", tags=["tools"])
@@ -67,7 +71,13 @@ def register_tool(
         organization_id=str(tenant.organization_id),
         data=tool_data.model_dump(exclude_none=True),
     )
-    return tools_repo.create(tool)
+    created = tools_repo.create(tool)
+    record_audit(
+        db, tenant.organization_id, "tool.register",
+        user_id=str(tenant.user_id), resource_type="tool",
+        resource_id=str(created.id), meta={"tool_type": created.tool_type},
+    )
+    return created
 
 
 @router.get("/", response_model=List[ToolResponse])
@@ -147,7 +157,13 @@ def update_tool(
     for field, value in update_fields.items():
         setattr(tool, field, value)
 
-    return tools_repo.update(tool)
+    updated = tools_repo.update(tool)
+    record_audit(
+        db, tenant.organization_id, "tool.update",
+        user_id=str(tenant.user_id), resource_type="tool",
+        resource_id=str(updated.id), meta={"fields": list(update_fields.keys())},
+    )
+    return updated
 
 
 @router.delete("/{tool_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -169,6 +185,10 @@ def delete_tool(
         )
 
     tools_repo.delete(tool)
+    record_audit(
+        db, tenant.organization_id, "tool.delete",
+        user_id=str(tenant.user_id), resource_type="tool", resource_id=str(tool_id),
+    )
 
 
 @router.post(
@@ -199,10 +219,102 @@ def execute_tool(
         organization_id=tenant.organization_id,
         arguments=payload.arguments,
         db=db,
+        caller_role=tenant.role,
     )
     if result.error_type == "not_found":
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Tool not found",
         )
+    # Milestone B: tool-permission denial surfaces as 403, not a 200 error body.
+    if result.error_type == "permission_denied":
+        record_audit(
+            db, tenant.organization_id, "tool.execute_denied",
+            user_id=str(tenant.user_id), resource_type="tool",
+            resource_id=str(tool_uuid), meta={"role": tenant.role},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=result.error or "Tool execution not permitted for your role",
+        )
+
+    record_event(
+        db, tenant.organization_id, "tool_execution",
+        model_provider=result.tool_type, model_name=result.tool_name,
+        latency_ms=int(result.duration_ms),
+        status="success" if result.success else "error",
+        error=result.error if not result.success else None,
+        meta={"tool_id": str(result.tool_id), "error_type": result.error_type},
+    )
+    record_audit(
+        db, tenant.organization_id, "tool.execute",
+        user_id=str(tenant.user_id), resource_type="tool",
+        resource_id=str(tool_uuid),
+        meta={"success": result.success, "error_type": result.error_type},
+    )
     return ToolExecutionResponse(**result.to_dict())
+
+
+@router.post(
+    "/{tool_id}/health",
+    response_model=ToolResponse,
+)
+def check_tool_health(
+    tool_id: str,
+    tenant: TenantContext = Depends(require_roles(*_TOOL_MANAGER_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Probe a tool's health and persist the result (Milestone B, Step 3).
+
+    Webhook tools are probed with a lightweight ``HEAD`` request to their
+    configured endpoint (no payload, short timeout) so the check is safe and
+    cheap. Connection failures / timeouts mark the tool ``down``; any response
+    (including 4xx, which still proves the endpoint is reachable) marks it
+    ``ok``. Non-network tool types (function / lead_capture / human_escalation)
+    are marked ``ok``; ``custom`` tools (operator-defined) are ``unknown``.
+
+    The result is written to ``tool.health_status`` / ``last_checked_at`` and
+    returned on every tool read. Requires a manager role (same as updates).
+    """
+    tool_uuid = _uuid_or_400(tool_id, "tool_id")
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
+    tools_repo = repo_factory.tools()
+
+    tool = tools_repo.get(tool_uuid)
+    if tool is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tool not found",
+        )
+
+    health = _probe_tool_health(tool)
+    tool.health_status = health
+    tool.last_checked_at = datetime.now(timezone.utc)
+    updated = tools_repo.update(tool)
+    record_audit(
+        db, tenant.organization_id, "tool.health_check",
+        user_id=str(tenant.user_id), resource_type="tool",
+        resource_id=str(tool.id), meta={"health_status": health},
+    )
+    return updated
+
+
+def _probe_tool_health(tool: Tool) -> str:
+    """Return a coarse health status for a tool without raising."""
+    if tool.tool_type == "webhook":
+        endpoint = (tool.config or {}).get("endpoint") or (tool.config or {}).get("url")
+        if not endpoint:
+            return "unknown"
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.head(endpoint, follow_redirects=True)
+            # Any response (even 4xx/5xx) proves the endpoint is reachable.
+            return "ok" if resp.status_code < 500 else "degraded"
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError):
+            return "down"
+        except Exception:
+            return "unknown"
+    if tool.tool_type == "custom":
+        return "unknown"
+    # function / lead_capture / human_escalation are built-in and always healthy.
+    return "ok"

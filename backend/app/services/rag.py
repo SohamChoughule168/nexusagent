@@ -18,7 +18,11 @@ import uuid
 from typing import List, Optional, Tuple
 
 from app.ai.providers.base import GenerationRequest, Message, MessageRole
-from app.ai.providers.openrouter import OpenRouterProvider
+from app.ai.providers.factory import (
+    active_llm_provider_name,
+    create_llm_provider,
+)
+from app.ai.providers.base import ProviderError
 from app.core.config import settings
 from app.models.all_models import DocumentChunk, KnowledgeBase
 from app.repositories.tenant_repository import RepositoryFactory
@@ -58,11 +62,15 @@ def retrieve_chunks(
 
 
 def _llm_enabled() -> bool:
-    name = (getattr(settings, "RAG_LLM_PROVIDER", "local") or "local").lower()
-    if name in ("openrouter", "openai"):
-        if settings.OPENROUTER_API_KEY or settings.OPENAI_API_KEY:
-            return True
-    return False
+    name = active_llm_provider_name(settings)
+    if name == "local":
+        return False
+    try:
+        return create_llm_provider(name, settings) is not None
+    except ProviderError:
+        # Configured provider but missing/invalid credentials -> degrade to
+        # the offline composer rather than failing the request.
+        return False
 
 
 def rag_llm_enabled() -> bool:
@@ -117,11 +125,10 @@ async def _generate_with_llm(
     )
     user = f"Context:\n{context}\n\nQuestion: {query}"
 
-    api_key = settings.OPENROUTER_API_KEY or settings.OPENAI_API_KEY
-    provider = OpenRouterProvider(
-        api_key=api_key,
-        base_url=settings.OPENROUTER_BASE_URL,
-    )
+    provider = create_llm_provider(active_llm_provider_name(settings), settings, model_name)
+    if provider is None:
+        return compose_answer_offline(scored)
+
     request = GenerationRequest(
         messages=[
             Message(role=MessageRole.SYSTEM, content=system),
@@ -221,11 +228,10 @@ async def stream_answer(
     )
     user = f"Context:\n{context}\n\nQuestion: {query}"
 
-    api_key = settings.OPENROUTER_API_KEY or settings.OPENAI_API_KEY
-    provider = OpenRouterProvider(
-        api_key=api_key,
-        base_url=settings.OPENROUTER_BASE_URL,
-    )
+    provider = create_llm_provider(active_llm_provider_name(settings), settings, model_name)
+    if provider is None:
+        yield compose_answer_offline(scored)
+        return
     request = GenerationRequest(
         messages=[
             Message(role=MessageRole.SYSTEM, content=system),

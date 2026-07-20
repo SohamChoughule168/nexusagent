@@ -10,6 +10,9 @@ class RAGQueryRequest(BaseModel):
 
     question: str = Field(..., min_length=1)
     top_k: int = Field(default=5, ge=1, le=20)
+    tags: Optional[List[str]] = Field(
+        None, description="Restrict retrieval to documents carrying any of these tags"
+    )
 
 
 class RAGSource(BaseModel):

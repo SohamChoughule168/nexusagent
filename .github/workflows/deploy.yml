@@ -1,0 +1,56 @@
+# Deploy to Railway
+#
+# Deploys the backend + frontend services to Railway on every push to `main`.
+# This is the CI/CD step of the deployment phase (see docs/DEPLOYMENT_GUIDE.md
+# §11). It only *triggers* the deploy — it does not create the Railway project
+# or managed services, which require your account (see the [YOU] steps there).
+#
+# REQUIRED SECRETS (GitHub → Settings → Secrets → Actions)  [YOU]:
+#   RAILWAY_TOKEN       A Railway project access token
+#                       (dashboard → Account → Tokens, or `railway whoami`).
+#   RAILWAY_PROJECT_ID  The Railway project id to deploy into
+#                       (dashboard → Project → Settings → General, or
+#                       `railway status`).
+#
+# Manual fallback if you prefer not to use the workflow:
+#   railway login && railway link && railway up
+#
+# NOTE: Database migrations are NOT run here. After a successful deploy, run
+#   railway run alembic upgrade head
+# once (see docs/DEPLOYMENT_GUIDE.md §6). Migrations against the shared
+# production DB are intentionally a deliberate, reviewable step.
+
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [main]
+  # Allow manual runs from the Actions tab.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy backend + frontend
+    runs-on: ubuntu-latest
+    # Only run if the required secrets are configured; otherwise skip loudly.
+    if: ${{ secrets.RAILWAY_TOKEN != '' && secrets.RAILWAY_PROJECT_ID != '' }}
+    env:
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy to Railway
+        # `railway up` builds both services defined in railway.toml (backend
+        # from the repo root, frontend from ./frontend) and publishes them.
+        run: railway up --detach
+
+      - name: Report deploy URL
+        run: railway status || true

@@ -129,22 +129,38 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
-    # LLM Providers (secrets - never log values)
+    # LLM Providers (secrets - never log values). Switching providers requires
+    # ONLY a config change (the provider name + its credentials) -- no code.
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     OPENAI_API_KEY: Optional[str] = None
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     ANTHROPIC_API_KEY: Optional[str] = None
+    ANTHROPIC_BASE_URL: str = "https://api.anthropic.com/v1"
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com"
+    # Azure OpenAI: a hosted OpenAI deployment with a versioned endpoint.
+    AZURE_OPENAI_API_KEY: Optional[str] = None
+    AZURE_OPENAI_ENDPOINT: Optional[str] = None  # e.g. https://my-resource.openai.azure.com
+    AZURE_OPENAI_API_VERSION: str = "2024-02-15-preview"
+    AZURE_OPENAI_DEPLOYMENT: Optional[str] = None  # e.g. gpt-4o
+    # Ollama: self-hosted local models (no API key required).
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_LLM_MODEL: str = "llama3"
+    OLLAMA_EMBED_MODEL: str = "nomic-embed-text"
 
-    # Embeddings: "local" (deterministic, offline, default) or an
-    # OpenAI-compatible provider ("openai"/"openrouter"). The API provider is
-    # only used when this is set AND a corresponding API key is configured;
+    # Embeddings: "local" (deterministic, offline, default) or a remote
+    # provider -- "openai"/"openrouter" (OpenAI-compatible), "azure" (Azure
+    # OpenAI), "gemini" (Google Gemini), or "ollama" (local). The remote
+    # provider is only used when this is set AND its credentials are configured;
     # otherwise the local embedder is used so the pipeline runs without keys.
     EMBEDDINGS_PROVIDER: str = "local"
 
     # RAG answer generation: "local" (offline composer that returns the most
-    # relevant retrieved context, default) or "openrouter"/"openai" to call a
-    # real LLM for grounded answers. The LLM is only used when this is set AND
-    # a key is configured; otherwise the local composer keeps it testable.
+    # relevant retrieved context, default) or a remote provider --
+    # "openrouter"/"openai"/"anthropic"/"gemini"/"azure"/"ollama". Switching is
+    # config-only; the LLM is used only when the selected provider's credentials
+    # are present, otherwise the local composer keeps the pipeline testable.
     RAG_LLM_PROVIDER: str = "local"
     RAG_LLM_MODEL: str = "openai/gpt-4o-mini"
 
@@ -207,9 +223,19 @@ class Settings(BaseSettings):
     ALLOWED_EXTENSIONS: List[str] = [
         "pdf", "doc", "docx", "txt", "csv", "html", "md", "json"
     ]
-    # MIME types accepted by the Document Upload API this milestone. PDF only
-    # for now ("PDF initially"); widen as later milestones add parsers.
-    ALLOWED_MIME_TYPES: List[str] = ["application/pdf"]
+    # MIME types accepted by the Document Upload API (must cover every extension
+    # in ALLOWED_EXTENSIONS). Upload validation is extension-primary: a missing
+    # or unrecognised MIME is tolerated as long as the extension is allowed.
+    ALLOWED_MIME_TYPES: List[str] = [
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "text/plain",
+        "text/csv",
+        "text/html",
+        "text/markdown",
+        "application/json",
+    ]
 
     @field_validator("ALLOWED_EXTENSIONS", "ALLOWED_MIME_TYPES", mode="before")
     @classmethod
@@ -258,6 +284,18 @@ class Settings(BaseSettings):
     TOOL_EXECUTION_TIMEOUT_SECONDS: float = 15.0
     TOOL_EXECUTION_MAX_OUTPUT_CHARS: int = 10000
 
+    # Email / notifications (Milestone B, Step 6). When ``EMAIL_ENABLED`` is
+    # False (the default), outbound email is a no-op log line so the platform
+    # runs without an SMTP server. Set the host/port/credentials to send real
+    # transactional mail (escalations, lead alerts, invites).
+    EMAIL_ENABLED: bool = False
+    EMAIL_SMTP_HOST: Optional[str] = None
+    EMAIL_SMTP_PORT: int = 587
+    EMAIL_SMTP_USER: Optional[str] = None
+    EMAIL_SMTP_PASSWORD: Optional[str] = None
+    EMAIL_FROM: Optional[str] = None
+    EMAIL_USE_TLS: bool = True
+
     # Celery
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
@@ -289,19 +327,34 @@ class Settings(BaseSettings):
             errors.append("REDIS_URL is missing")
 
         # Remote LLM / embeddings providers require their API key. The "local"
-        # providers have offline fallbacks, so they are exempt — this honours
-        # the documented offline mode while still refusing to boot an
-        # openrouter/openai configuration with no key.
-        provider_keys = {
-            "openrouter": self.OPENROUTER_API_KEY,
-            "openai": self.OPENAI_API_KEY,
+        # and "ollama" providers have offline fallbacks (or need no key), so
+        # they are exempt — this honours the documented offline mode while still
+        # refusing to boot a remote configuration with no credentials.
+        provider_key_attr = {
+            "openrouter": "OPENROUTER_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "azure": "AZURE_OPENAI_API_KEY",
         }
+        no_key_providers = {"local", "ollama"}
         for setting, provider in (
             ("EMBEDDINGS_PROVIDER", self.EMBEDDINGS_PROVIDER),
             ("RAG_LLM_PROVIDER", self.RAG_LLM_PROVIDER),
         ):
-            if provider in provider_keys and not provider_keys[provider]:
+            provider = (provider or "local").lower()
+            if provider in no_key_providers:
+                continue
+            key_attr = provider_key_attr.get(provider)
+            if key_attr and not getattr(self, key_attr):
                 errors.append(f"{setting}={provider} is set but its API key is missing")
+            if provider == "azure" and not (
+                self.AZURE_OPENAI_ENDPOINT and self.AZURE_OPENAI_DEPLOYMENT
+            ):
+                errors.append(
+                    f"{setting}=azure is set but AZURE_OPENAI_ENDPOINT / "
+                    "AZURE_OPENAI_DEPLOYMENT are missing"
+                )
 
         if not errors:
             return

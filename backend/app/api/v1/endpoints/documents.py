@@ -27,10 +27,11 @@ pgvector is the documented production upgrade (ADR-003).
 """
 import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, status, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, status, UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.auth_dependencies import get_tenant_context, require_roles
@@ -40,10 +41,14 @@ from app.models.all_models import Document, DocumentChunk
 from app.repositories.tenant_repository import RepositoryFactory
 from app.schemas.document import DocumentChunkResponse, DocumentResponse
 from app.schemas.rag import RAGQueryRequest, RAGQueryResponse
+from app.services.audit import record_audit
+from app.services.background_tasks import create_task, finish_task, start_task, update_progress
 from app.services.embeddings import cosine_similarity, get_embedding_provider
 from app.services.ingestion import ingest_document
 from app.services.rag import compose_answer, retrieve_chunks
 from app.services.tenant_context import TenantContext
+from app.services.usage import record_event
+from app.ai.providers.factory import active_llm_provider_name
 # Reuse the existing UUID-path validation helper rather than duplicating it.
 from app.api.v1.endpoints.knowledge_bases import _uuid_or_400
 
@@ -100,6 +105,33 @@ def _validate_file_type(file: UploadFile) -> None:
         )
 
 
+def _parse_tags(raw: Optional[str]) -> List[str]:
+    """Parse a comma-separated tag string into a clean, de-duplicated list."""
+    if not raw:
+        return []
+    out: List[str] = []
+    for part in raw.split(","):
+        tag = part.strip()
+        if tag and tag not in out:
+            out.append(tag)
+    return out
+
+
+def _document_ids_with_any_tag(
+    repo_factory: RepositoryFactory,
+    kb_uuid: uuid.UUID,
+    tags: List[str],
+) -> set:
+    """Return the set of document ids in ``kb`` whose tags intersect ``tags``."""
+    docs = repo_factory.documents().get_by_knowledge_base(kb_uuid)
+    wanted = set(tags)
+    return {
+        str(d.id)
+        for d in docs
+        if wanted.intersection(set(d.tags or []))
+    }
+
+
 @kb_documents_router.post(
     "/knowledge-bases/{knowledge_base_id}/documents",
     response_model=DocumentResponse,
@@ -109,10 +141,15 @@ async def upload_document(
     knowledge_base_id: str,
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
+    tags: Optional[str] = Form(None),
     tenant: TenantContext = Depends(require_roles(*_WRITE_ROLES)),
     db: Session = Depends(get_db),
 ):
-    """Upload a document (PDF) into a knowledge base owned by the tenant."""
+    """Upload a document (PDF) into a knowledge base owned by the tenant.
+
+    ``tags`` is an optional comma-separated list of metadata tags stored on the
+    document and later used to filter retrieval (see the search/query endpoints).
+    """
     kb_uuid = _uuid_or_400(knowledge_base_id, "knowledge_base_id")
     org_id = tenant.organization_id
 
@@ -164,12 +201,21 @@ async def upload_document(
 
     doc_repo = repo_factory.documents()
     doc = Document(organization_id=str(org_id), data=doc_data)
+    # ``Document.__init__`` does not consume ``tags``, so assign it directly.
+    parsed_tags = _parse_tags(tags)
+    if parsed_tags:
+        doc.tags = parsed_tags
     try:
         created = doc_repo.create(doc)
     except Exception:
         # Roll back the on-disk write if the DB insert failed.
         _remove_file(storage_path)
         raise
+    record_audit(
+        db, org_id, "document.upload",
+        user_id=str(tenant.user_id), resource_type="document",
+        resource_id=str(created.id), meta={"kb_id": str(kb_uuid), "tags": parsed_tags},
+    )
     return created
 
 
@@ -215,6 +261,42 @@ def get_document(
     return doc
 
 
+@documents_router.get(
+    "/documents",
+    response_model=List[DocumentResponse],
+    tags=["documents"],
+)
+def list_documents_org(
+    knowledge_base_id: Optional[str] = Query(None, description="Filter by knowledge base"),
+    status: Optional[str] = Query(None, description="Filter by lifecycle status"),
+    tag: Optional[str] = Query(None, description="Filter by a metadata tag"),
+    search: Optional[str] = Query(None, description="Substring match on title/filename"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    tenant: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+):
+    """List documents across the tenant's knowledge bases with optional filters.
+
+    Supports scoping to a knowledge base (``knowledge_base_id``), a lifecycle
+    ``status`` (uploaded/processed/indexed/failed), a metadata ``tag`` (ARRAY
+    containment), and a free-text ``search`` over title/filename. Pagination is
+    via ``limit`` / ``offset``. This is the org-wide document-management view
+    that complements the per-KB listing.
+    """
+    kb_uuid = _uuid_or_400(knowledge_base_id, "knowledge_base_id") if knowledge_base_id else None
+    repo_factory = RepositoryFactory(db, tenant.organization_id)
+    docs = repo_factory.documents().find(
+        kb_id=kb_uuid,
+        status=status,
+        tag=tag,
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+    return docs
+
+
 @documents_router.delete(
     "/documents/{document_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -236,6 +318,11 @@ def delete_document(
         )
     storage_path = doc.storage_path
     doc_repo.delete(doc)
+    record_audit(
+        db, tenant.organization_id, "document.delete",
+        user_id=str(tenant.user_id), resource_type="document",
+        resource_id=str(doc_uuid),
+    )
     # Best-effort cleanup of the persisted raw bytes.
     _remove_file(storage_path)
 
@@ -281,7 +368,13 @@ def ingest_document_endpoint(
             detail="Knowledge base not found",
         )
 
-    return ingest_document(db, tenant, doc, kb)
+    result = ingest_document(db, tenant, doc, kb)
+    record_audit(
+        db, tenant.organization_id, "document.ingest",
+        user_id=str(tenant.user_id), resource_type="document",
+        resource_id=str(doc_uuid), meta={"chunk_count": result.chunk_count},
+    )
+    return result
 
 
 @documents_router.post(
@@ -335,24 +428,43 @@ def embed_document_endpoint(
             detail="Document has no chunks; ingest it before embedding",
         )
 
+    # Track the embedding job so clients can poll real status/progress.
+    task = create_task(db, tenant.organization_id, "document_embed", {"document_id": str(doc_uuid)})
+    start_task(db, task)
+
     provider = get_embedding_provider(kb, settings)
     contents = [c.content for c in chunks]
     vectors = provider.embed(contents)
 
-    for chunk, vector in zip(chunks, vectors):
+    total = len(chunks)
+    for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
         chunk.embedding = vector
         chunk.embedding_id = str(uuid.uuid4())
         chunk_repo.update(chunk)
+        # Report incremental progress (chunking was the first 50%).
+        update_progress(db, task, 50 + int((i + 1) / total * 50))
 
     doc.status = "indexed"
+    doc.indexing_progress = 100
+    doc.total_chunks = total
+    doc.indexed_chunks = total
+    from datetime import datetime, timezone
+
+    doc.last_indexed_at = datetime.now(timezone.utc)
     doc.meta = {
         **(doc.meta or {}),
         "embedding": {
             "provider": type(provider).__name__,
             "dimensions": provider.dimensions,
-            "chunk_count": len(chunks),
+            "chunk_count": total,
         },
     }
+    finish_task(db, task, result={"document_id": str(doc_uuid), "chunks": total})
+    record_audit(
+        db, tenant.organization_id, "document.embed",
+        user_id=str(tenant.user_id), resource_type="document",
+        resource_id=str(doc_uuid), meta={"chunks": total},
+    )
     return doc_repo.update(doc)
 
 
@@ -364,6 +476,7 @@ def search_knowledge_base(
     knowledge_base_id: str,
     q: Optional[str] = None,
     top_k: int = 5,
+    tags: Optional[List[str]] = Query(None, description="Restrict to documents carrying any of these tags"),
     tenant: TenantContext = Depends(get_tenant_context),
     db: Session = Depends(get_db),
 ):
@@ -372,6 +485,10 @@ def search_knowledge_base(
     Embeds the query with the knowledge base's provider, then ranks the
     knowledge base's embedded chunks by cosine similarity and returns the top-k.
     Any authenticated tenant member may search (read access).
+
+    ``tags`` (optional, repeatable) restricts retrieval to chunks whose document
+    carries at least one of the supplied metadata tags -- the Milestone B
+    metadata-filtering capability.
 
     Tenant isolation is enforced: a knowledge base in another org is invisible
     -> 404, and only this tenant's chunks are ranked.
@@ -396,6 +513,12 @@ def search_knowledge_base(
     chunks = chunk_repo.get_by_knowledge_base(kb_uuid)
     # Only chunks that have been embedded can be ranked.
     embedded = [c for c in chunks if c.embedding]
+
+    # Milestone B: metadata filtering. Restrict to chunks whose document has at
+    # least one of the requested tags (no tag filter -> search everything).
+    if tags:
+        allowed = _document_ids_with_any_tag(repo_factory, kb_uuid, tags)
+        embedded = [c for c in embedded if str(c.document_id) in allowed]
 
     provider = get_embedding_provider(kb, settings)
     (query_vec,) = provider.embed([q])
@@ -433,6 +556,9 @@ async def query_knowledge_base(
     ``RAG_LLM_PROVIDER`` + a key are set). Returns the answer plus its sources.
     Any authenticated tenant member may query (read access).
 
+    ``tags`` (optional, repeatable on the request body) restricts retrieval to
+    chunks whose document carries at least one of the supplied metadata tags.
+
     Tenant isolation: a knowledge base in another org is invisible -> 404, and
     only this tenant's chunks are retrieved/ranked.
     """
@@ -454,7 +580,27 @@ async def query_knowledge_base(
         )
 
     scored = retrieve_chunks(kb, q, db, tenant.organization_id, top_k)
+
+    # Milestone B: metadata filtering on the retrieved set.
+    tags = payload.tags
+    if tags:
+        allowed = _document_ids_with_any_tag(repo_factory, kb_uuid, tags)
+        scored = [(c, s) for c, s in scored if str(c.document_id) in allowed]
+
+    started_at = datetime.now(timezone.utc)
     answer = await compose_answer(q, scored)
+    latency_ms = int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000)
+
+    # Milestone B, Step 5: record a RAG-query usage event so analytics has
+    # real latency / provider / success data (defensive: never breaks the query).
+    record_event(
+        db, tenant.organization_id, "rag_query",
+        model_provider=active_llm_provider_name(settings),
+        model_name=settings.RAG_LLM_MODEL,
+        latency_ms=latency_ms,
+        status="success" if answer else "error",
+        meta={"kb_id": str(kb_uuid), "chunks": len(scored)},
+    )
 
     sources = [
         {

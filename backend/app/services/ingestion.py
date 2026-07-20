@@ -329,6 +329,13 @@ def ingest_document(
 
     document.status = "processed"
     document.chunk_count = len(chunks)
+    # Milestone B: record real indexing progress. Ingestion (extract + chunk)
+    # is the first half of the pipeline; embedding is the second. We mark the
+    # document 50% once it is chunked and bump it to 100% when embedding
+    # completes (see the embed endpoint). ``total_chunks`` seeds the
+    # denominator the embed step uses to report per-chunk progress.
+    document.total_chunks = len(chunks)
+    document.indexing_progress = 50 if len(chunks) else 0
     document.error_message = None
     document.meta = {
         **(document.meta or {}),

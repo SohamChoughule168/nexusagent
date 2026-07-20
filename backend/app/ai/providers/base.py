@@ -9,6 +9,8 @@ class ProviderType(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
+    AZURE = "azure"
+    OLLAMA = "ollama"
     LOCAL = "local"
 
 

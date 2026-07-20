@@ -1,0 +1,43 @@
+# railway.toml — NexusAgent AI (Railway, multi-service)
+#
+# Defines the two services so `railway up` (and the CI workflow
+# .github/workflows/deploy.yml) builds them deterministically without an
+# interactive prompt. The repo root contains two Dockerfiles
+# (backend/Dockerfile and frontend/Dockerfile), so this file is required for
+# non-interactive deploys.
+#
+# Cross-service domain refs (Railway template syntax) avoid hardcoding the
+# auto-assigned *.up.railway.app subdomains:
+#   ${{backend.RAILWAY_PUBLIC_DOMAIN}}  -> backend public URL
+#   ${{frontend.RAILWAY_PUBLIC_DOMAIN}} -> frontend public URL
+#
+# SECRETS (JWT_*, SECURITY_PASSWORD_SALT) are intentionally NOT committed here.
+# Set them as secret variables in the Railway dashboard (or a project secret).
+
+[backend]
+rootDirectory = "."
+dockerfilePath = "backend/Dockerfile"
+healthcheckPath = "/health"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+[backend.variables]
+DEBUG = "false"
+DOCS_ENABLED = "false"
+TRUST_PROXY = "true"
+LOG_LEVEL = "INFO"
+LOG_FORMAT = "json"
+BACKEND_CORS_ORIGINS = "https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}"
+
+[frontend]
+rootDirectory = "frontend"
+dockerfilePath = "frontend/Dockerfile"
+healthcheckPath = "/"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+[frontend.variables]
+NEXT_TELEMETRY_DISABLED = "1"
+# Inlined into the client bundle at build time — baked, not read at runtime.
+NEXT_PUBLIC_API_BASE_URL = "https://${{backend.RAILWAY_PUBLIC_DOMAIN}}/api/v1"
+

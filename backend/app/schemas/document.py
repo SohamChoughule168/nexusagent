@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, ConfigDict
@@ -11,6 +11,10 @@ class DocumentResponse(BaseModel):
     The ORM attribute is ``meta`` (``metadata`` is reserved by SQLAlchemy's
     declarative Base), so we map it to the conventional ``metadata`` JSON key
     via a validation/serialization alias.
+
+    Milestone B fields (indexing progress + metadata tags) are surfaced so the
+    UI can render real ingestion/embedding progress and support tag-based
+    filtering at retrieval time.
     """
 
     id: UUID
@@ -28,6 +32,12 @@ class DocumentResponse(BaseModel):
     error_message: Optional[str] = None
     upload_member_id: UUID
     embedding_id: Optional[str] = None
+    # Milestone B: indexing progress + metadata filtering support.
+    indexing_progress: int = 0
+    total_chunks: int = 0
+    indexed_chunks: int = 0
+    last_indexed_at: Optional[datetime] = None
+    tags: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(
         default_factory=dict,
         alias="meta",
